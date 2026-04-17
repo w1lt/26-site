@@ -28,6 +28,8 @@ export interface SpotifyTrack {
   albumArt: string;
   songUrl: string;
   isPlaying: boolean;
+  /** Present when Spotify marks the track explicit (clean / non-explicit omitted). */
+  explicit?: boolean;
   playedAt?: string;
   progressMs?: number;
   durationMs?: number;
@@ -108,6 +110,7 @@ export async function getNowPlaying(): Promise<SpotifyTrack | null> {
           albumArt: track.album.images[0]?.url || "",
           songUrl: track.external_urls.spotify,
           isPlaying: false,
+          explicit: Boolean(track.explicit),
           playedAt: recentData.items[0].played_at,
         };
       }
@@ -134,6 +137,7 @@ export async function getNowPlaying(): Promise<SpotifyTrack | null> {
       albumArt: data.item.album.images[0]?.url || "",
       songUrl: data.item.external_urls.spotify,
       isPlaying: data.is_playing,
+      explicit: Boolean(data.item.explicit),
       progressMs: data.progress_ms,
       durationMs: data.item.duration_ms,
     };

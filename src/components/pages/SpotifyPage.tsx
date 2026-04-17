@@ -341,6 +341,10 @@ function SpotifyPage({
     : isLightBg
       ? `text-black/80 ${textShadow}`
       : `text-white/80 ${textShadow}`;
+  const artistOnLightBackground =
+    useInitialTheme && initialTextTheme
+      ? initialTextTheme.artistTextClass.includes("text-black")
+      : isLightBg;
   const textMutedClass = useInitialTheme
     ? initialTextTheme.textMutedClass
     : isLightBg
@@ -497,29 +501,72 @@ function SpotifyPage({
                     }}
                     className="flex flex-col items-start"
                   >
-                    <div className="flex flex-col items-start w-full">
+                    <div className="flex flex-col items-start w-full gap-0">
                       <h2
-                        className={`text-lg md:text-2xl font-bold inline-block max-w-full truncate cursor-pointer hover:underline ${textClass}`}
+                        className={`text-lg md:text-2xl font-bold inline-block max-w-full truncate cursor-pointer hover:underline leading-tight ${textClass}`}
                         onClick={() => window.open(displayTrack.songUrl, "_blank")}
                       >
                         {displayTrack.name}
                       </h2>
-                      <p
-                        className={`text-sm md:text-base inline-block max-w-full truncate cursor-pointer hover:underline mt-px ${artistTextClass}`}
-                        onClick={() => window.open(displayTrack.artistUrl, "_blank")}
+                      <div
+                        className="flex items-center gap-1.5 w-full min-w-0"
+                        style={{ marginTop: "3px" }}
                       >
-                        {displayTrack.artist}
-                      </p>
+                        {displayTrack.explicit ? (
+                          <span
+                            title="Explicit"
+                            aria-label="Explicit"
+                            style={{
+                              boxSizing: "border-box",
+                              width: "12px",
+                              height: "12px",
+                              minWidth: "12px",
+                              minHeight: "12px",
+                              maxWidth: "12px",
+                              maxHeight: "12px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0,
+                              margin: 0,
+                              padding: 0,
+                              border: "none",
+                              borderRadius: "3px",
+                              overflow: "hidden",
+                              fontSize: "7px",
+                              fontWeight: 700,
+                              lineHeight: 1,
+                              letterSpacing: "0.02em",
+                              textTransform: "uppercase",
+                              backgroundColor: artistOnLightBackground
+                                ? "#000000"
+                                : "#ffffff",
+                              color: artistOnLightBackground ? "#ffffff" : "#000000",
+                            }}
+                          >
+                            E
+                          </span>
+                        ) : null}
+                        <p
+                          className={`text-xs md:text-sm inline-block min-w-0 flex-1 truncate cursor-pointer hover:underline leading-tight ${artistTextClass}`}
+                          onClick={() => window.open(displayTrack.artistUrl, "_blank")}
+                        >
+                          {displayTrack.artist}
+                        </p>
+                      </div>
                     </div>
 
                     {displayTrack.durationMs && (
                       <div className="w-full max-w-sm mx-auto mt-4">
                         <div
-                          className="w-full rounded-full h-2 mb-1"
-                          style={progressTrackStyle}
+                          className="w-full rounded-full h-1"
+                          style={{
+                            ...progressTrackStyle,
+                            marginBottom: "6px",
+                          }}
                         >
                           <div
-                            className={`h-2 rounded-full transition-all duration-1000 ${progressFillClass}`}
+                            className={`h-1 rounded-full transition-all duration-1000 ${progressFillClass}`}
                             style={{
                               width: `${
                                 (displayProgress / displayTrack.durationMs) * 100
@@ -527,9 +574,20 @@ function SpotifyPage({
                             }}
                           />
                         </div>
-                        <div className={`flex justify-between text-xs ${textMutedClass}`}>
-                          <span>{formatTime(displayProgress)}</span>
-                          <span>{formatTime(displayTrack.durationMs)}</span>
+                        <div
+                          className={`flex justify-between ${textMutedClass}`}
+                          style={{
+                            fontSize: "10px",
+                            lineHeight: 1,
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                        >
+                          <span style={{ fontSize: "10px", lineHeight: 1 }}>
+                            {formatTime(displayProgress)}
+                          </span>
+                          <span style={{ fontSize: "10px", lineHeight: 1 }}>
+                            {formatTime(displayTrack.durationMs)}
+                          </span>
                         </div>
                       </div>
                     )}
