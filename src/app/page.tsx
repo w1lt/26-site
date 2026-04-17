@@ -4,6 +4,7 @@ import {
   extractColorsFromImageUrlServer,
   getTextThemeFromColors,
 } from "@/lib/extractColorsServer";
+import { buildAlbumBackdropGradient } from "@/lib/albumGradient";
 
 export default async function Home() {
   const initialTrack = await getNowPlaying();
@@ -13,16 +14,19 @@ export default async function Home() {
       : null;
   const initialTextTheme = getTextThemeFromColors(initialColors);
 
-  const serverGradient =
+  const serverGradientStyle =
     initialColors &&
-    `radial-gradient(circle 120vmax at 50% 50%, ${initialColors[0]} 0%, ${initialColors[1]} 95%, ${initialColors[1]} 95%)`;
+    ({
+      backgroundColor: "#1a1a20",
+      backgroundImage: buildAlbumBackdropGradient(initialColors),
+    } as const);
 
   return (
     <main className="flex min-h-dvh items-center justify-center overflow-hidden bg-transparent p-4">
-      {serverGradient && (
+      {serverGradientStyle && (
         <div
           className="fixed inset-0 -z-10 min-h-dvh"
-          style={{ background: serverGradient }}
+          style={serverGradientStyle}
           aria-hidden
         />
       )}

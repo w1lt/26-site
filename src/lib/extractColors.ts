@@ -37,8 +37,11 @@ export function extractGradientColors(imageData: ImageData | PixelBuffer): [stri
   const cy = height / 2;
   const maxRadius = Math.min(width, height) / 2;
   const samples: { r: number; g: number; b: number; score: number }[] = [];
+  /** Outer ring (frame) pixels — avoids a fake “bottom vignette” from crushing a global average to black */
+  const outerRing: { r: number; g: number; b: number }[] = [];
   let totalBrightness = 0;
   let sampleCount = 0;
+  const outerThreshold = maxRadius * 0.52;
 
   for (let y = 0; y < height; y += step) {
     for (let x = 0; x < width; x += step) {
@@ -65,6 +68,10 @@ export function extractGradientColors(imageData: ImageData | PixelBuffer): [stri
       const distFromCenter = Math.sqrt(dx * dx + dy * dy);
       const innerBias = Math.max(0, 1 - distFromCenter / (maxRadius * 0.6));
 
+      if (distFromCenter >= outerThreshold) {
+        outerRing.push({ r, g, b });
+      }
+
       // saturation^6 heavily favors any actual color; lower brightness weight so dim blobs (e.g. dark blue) can win
       const score =
         Math.pow(saturation, 6) * (0.25 + brightness * 0.5) * (0.5 + innerBias * 0.5);
@@ -84,21 +91,32 @@ export function extractGradientColors(imageData: ImageData | PixelBuffer): [stri
   const g1 = vibrant.reduce((s, p) => s + p.g, 0) / vibrant.length;
   const b1 = vibrant.reduce((s, p) => s + p.b, 0) / vibrant.length;
 
-  const allR = samples.reduce((s, p) => s + p.r, 0) / samples.length;
-  const allG = samples.reduce((s, p) => s + p.g, 0) / samples.length;
-  const allB = samples.reduce((s, p) => s + p.b, 0) / samples.length;
-
-  const maxChannel = 200;
+  const maxChannel = 235;
   const centerColor = rgbToHex(
-    Math.min(maxChannel, r1 * 1.12 * brightnessBoost),
-    Math.min(maxChannel, g1 * 1.12 * brightnessBoost),
-    Math.min(maxChannel, b1 * 1.12 * brightnessBoost)
+    Math.min(maxChannel, r1 * 1.2 * brightnessBoost),
+    Math.min(maxChannel, g1 * 1.2 * brightnessBoost),
+    Math.min(maxChannel, b1 * 1.2 * brightnessBoost)
   );
-  const edgeMaxChannel = 60;
+
+  // Edge: outer ring / darker cousin of center — kept lighter than before
+  const edgeMax = 165;
+  const edgeScale = 0.72;
+  let er: number;
+  let eg: number;
+  let eb: number;
+  if (outerRing.length >= 4) {
+    er = outerRing.reduce((s, p) => s + p.r, 0) / outerRing.length;
+    eg = outerRing.reduce((s, p) => s + p.g, 0) / outerRing.length;
+    eb = outerRing.reduce((s, p) => s + p.b, 0) / outerRing.length;
+  } else {
+    er = r1;
+    eg = g1;
+    eb = b1;
+  }
   const edgeColor = rgbToHex(
-    Math.min(edgeMaxChannel, allR * 0.15),
-    Math.min(edgeMaxChannel, allG * 0.15),
-    Math.min(edgeMaxChannel, allB * 0.15)
+    Math.min(edgeMax, er * edgeScale),
+    Math.min(edgeMax, eg * edgeScale),
+    Math.min(edgeMax, eb * edgeScale)
   );
   return [centerColor, edgeColor];
 }

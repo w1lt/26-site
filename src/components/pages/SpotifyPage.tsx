@@ -5,6 +5,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { getNowPlaying, type SpotifyTrack } from "@/app/actions/spotify";
 import { extractColorsFromImageUrl, getLuminance } from "@/lib/extractColors";
 import type { TextTheme } from "@/lib/extractColorsServer";
+import { buildAlbumBackdropGradient } from "@/lib/albumGradient";
+
+const IDLE_POLL_MS = 60_000;
 
 // Helper function to format milliseconds to MM:SS
 const formatTime = (ms: number) => {
@@ -46,7 +49,11 @@ function SpotifyPage({
   const [tilt, setTilt] = useState({ rotateX: 0, rotateY: 0 });
   const isInitialLoad = useRef(initialTrack === undefined);
   const hasLoadedOnce = useRef(initialTrack !== undefined);
-  const progressInterval = useRef<NodeJS.Timeout | null>(null);
+  const progressInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const syncTimeRef = useRef(Date.now());
+  const progressAtSyncRef = useRef(initialTrack?.progressMs ?? 0);
+  const halfwayFetchedRef = useRef(false);
+  const endFetchedRef = useRef(false);
   const [previousTrackUrl, setPreviousTrackUrl] = useState<string | null>(null);
   const [, setTick] = useState(0);
   const [gradientColors, setGradientColors] = useState<[string, string] | null>(
@@ -157,6 +164,11 @@ function SpotifyPage({
         prevTrack?.songUrl &&
         data.songUrl !== prevTrack.songUrl;
 
+      if (isTrackChange) {
+        halfwayFetchedRef.current = false;
+        endFetchedRef.current = false;
+      }
+
       setTrack(data);
       if (!data) {
         setGradientColors(null);
@@ -165,7 +177,16 @@ function SpotifyPage({
         setDisplayTrack(data);
       }
       if (data?.progressMs !== undefined) {
+        const now = Date.now();
+        syncTimeRef.current = now;
+        progressAtSyncRef.current = data.progressMs;
         setCurrentProgress(data.progressMs);
+        if (data.durationMs) {
+          const d = data.durationMs;
+          const p = data.progressMs;
+          if (p >= d / 2 - 400) halfwayFetchedRef.current = true;
+          if (p >= d - 600) endFetchedRef.current = true;
+        }
       }
 
       if (isInitialLoad.current) {
@@ -188,10 +209,25 @@ function SpotifyPage({
     if (initialTrack === undefined) {
       fetchSpotifyData();
     }
-    const pollInterval = track?.isPlaying ? 2000 : 15000;
-    const interval = setInterval(fetchSpotifyData, pollInterval);
-    return () => clearInterval(interval);
-  }, [fetchSpotifyData, initialTrack, track?.isPlaying]);
+  }, [fetchSpotifyData, initialTrack]);
+
+  /** Seed sync + threshold flags from server-rendered track */
+  useEffect(() => {
+    if (
+      initialTrack === undefined ||
+      initialTrack === null ||
+      !initialTrack.durationMs ||
+      initialTrack.progressMs === undefined
+    ) {
+      return;
+    }
+    syncTimeRef.current = Date.now();
+    progressAtSyncRef.current = initialTrack.progressMs;
+    const d = initialTrack.durationMs;
+    const p = initialTrack.progressMs;
+    if (p >= d / 2 - 400) halfwayFetchedRef.current = true;
+    if (p >= d - 600) endFetchedRef.current = true;
+  }, [initialTrack?.songUrl]);
 
   useEffect(() => {
     if (displayTrack?.songUrl && !previousTrackUrl && hasLoadedOnce.current) {
@@ -202,62 +238,60 @@ function SpotifyPage({
     }
   }, [displayTrack?.songUrl, previousTrackUrl]);
 
-  const preloadWindowMs = 2500;
+  /** One fetch when resuming playback so progress/duration resync */
+  const wasPlayingRef = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    const playing = !!track?.isPlaying;
+    if (wasPlayingRef.current === false && playing) {
+      fetchSpotifyData();
+    }
+    wasPlayingRef.current = playing;
+  }, [track?.isPlaying, fetchSpotifyData]);
 
+  /** Slow poll when idle / paused / no playback */
+  useEffect(() => {
+    if (track?.isPlaying) return;
+    const id = setInterval(fetchSpotifyData, IDLE_POLL_MS);
+    return () => clearInterval(id);
+  }, [track?.isPlaying, fetchSpotifyData]);
+
+  /** Playing: advance progress from server sync; fetch at ~halfway and ~end only */
   useEffect(() => {
     if (progressInterval.current) {
       clearInterval(progressInterval.current);
+      progressInterval.current = null;
     }
 
-    if (track?.isPlaying && track?.durationMs) {
-      const durationMs = track.durationMs;
-      progressInterval.current = setInterval(() => {
-        let shouldFetch = false;
-        setCurrentProgress((prev) => {
-          const next = prev + 1000;
-          if (next >= durationMs) {
-            if (prev < durationMs) shouldFetch = true;
-            return durationMs;
-          }
-          if (next >= durationMs - preloadWindowMs) {
-            shouldFetch = true;
-          }
-          return next;
-        });
-        if (shouldFetch) {
-          fetchSpotifyData();
-        }
-      }, 1000);
+    if (!track?.isPlaying || !track?.durationMs) {
+      return;
     }
+
+    const durationMs = track.durationMs;
+
+    progressInterval.current = setInterval(() => {
+      const est = Math.min(
+        progressAtSyncRef.current + (Date.now() - syncTimeRef.current),
+        durationMs
+      );
+      setCurrentProgress(est);
+
+      if (!halfwayFetchedRef.current && est >= durationMs / 2) {
+        halfwayFetchedRef.current = true;
+        fetchSpotifyData();
+      }
+      if (!endFetchedRef.current && est >= durationMs - 400) {
+        endFetchedRef.current = true;
+        fetchSpotifyData();
+      }
+    }, 1000);
 
     return () => {
       if (progressInterval.current) {
         clearInterval(progressInterval.current);
+        progressInterval.current = null;
       }
     };
   }, [track?.isPlaying, track?.durationMs, track?.songUrl, fetchSpotifyData]);
-
-  useEffect(() => {
-    if (
-      !track?.isPlaying ||
-      !track?.durationMs ||
-      !track?.albumArt ||
-      currentProgress < track.durationMs - preloadWindowMs
-    ) {
-      return;
-    }
-    const remainingMs = track.durationMs - currentProgress;
-    if (remainingMs <= 0) return;
-    const pollMs = 500;
-    const interval = setInterval(fetchSpotifyData, pollMs);
-    return () => clearInterval(interval);
-  }, [
-    track?.isPlaying,
-    track?.durationMs,
-    track?.albumArt,
-    currentProgress,
-    fetchSpotifyData,
-  ]);
 
   useEffect(() => {
     if (!track?.isPlaying && track?.playedAt) {
@@ -333,14 +367,15 @@ function SpotifyPage({
     <div className="w-full max-w-sm overflow-hidden">
       <div
         className="fixed inset-0 -z-20"
-        style={{ background: "#18181b" }}
+        style={{ background: "#1a1a20" }}
         aria-hidden
       />
       {gradientColors && (
         <div
           className="fixed inset-0 -z-10"
           style={{
-            background: `radial-gradient(circle 120vmax at 50% 50%, ${gradientColors[0]} 0%, ${gradientColors[1]} 95%, ${gradientColors[1]} 95%)`,
+            backgroundColor: "#1a1a20",
+            backgroundImage: buildAlbumBackdropGradient(gradientColors),
           }}
           aria-hidden
         />
