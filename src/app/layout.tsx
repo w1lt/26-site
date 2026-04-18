@@ -13,8 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Spotify Now Playing",
-  description: "See what I'm currently listening to on Spotify",
+  title: "aspartame.us",
 };
 
 export default function RootLayout({
