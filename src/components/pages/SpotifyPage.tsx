@@ -7,7 +7,12 @@ import {
   useState,
   useRef,
 } from "react";
-import { getNowPlaying, type SpotifyTrack } from "@/app/actions/spotify";
+import {
+  getNowPlaying,
+  getRecentlyPlayed,
+  type SpotifyTrack,
+} from "@/app/actions/spotify";
+import { RecentTracksDrawer } from "@/components/RecentTracksDrawer";
 import {
   extractColorsFromImageUrl,
   type AlbumColorResult,
@@ -62,7 +67,10 @@ function SpotifyPage({
   const [albumColors, setAlbumColors] = useState<AlbumColorResult | null>(
     initialAlbumColors ?? null
   );
+  const [recentOpen, setRecentOpen] = useState(false);
   const trackRef = useRef<SpotifyTrack | null>(initialTrack ?? null);
+
+  const fetchRecentHistory = useCallback(() => getRecentlyPlayed(50), []);
 
   useEffect(() => {
     trackRef.current = track;
@@ -264,6 +272,7 @@ function SpotifyPage({
   );
 
   return (
+    <>
     <div className="w-full max-w-sm overflow-hidden">
       <div
         className="fixed inset-0 -z-20"
@@ -437,8 +446,26 @@ function SpotifyPage({
             No recent tracks found. Check back later!
           </p>
         )}
+
+        {!loading && !error && (
+          <div className="mt-5 flex w-full justify-center px-2">
+            <button
+              type="button"
+              onClick={() => setRecentOpen(true)}
+              className="relative z-20 flex min-h-10 items-center justify-center rounded-full border border-white/20 bg-white/10 px-3.5 py-2 text-sm font-medium text-white backdrop-blur-sm transition hover:bg-white/15 active:bg-white/20"
+            >
+              Listening history
+            </button>
+          </div>
+        )}
       </div>
     </div>
+    <RecentTracksDrawer
+      open={recentOpen}
+      onOpenChange={setRecentOpen}
+      fetchRecent={fetchRecentHistory}
+    />
+    </>
   );
 }
 

@@ -7,8 +7,8 @@ const REFRESH_TOKEN = process.env.SPOTIFY_REFRESH_TOKEN;
 const TOKEN_ENDPOINT = "https://accounts.spotify.com/api/token";
 const NOW_PLAYING_ENDPOINT =
   "https://api.spotify.com/v1/me/player/currently-playing";
-const RECENTLY_PLAYED_ENDPOINT =
-  "https://api.spotify.com/v1/me/player/recently-played?limit=1";
+const RECENTLY_PLAYED_BASE =
+  "https://api.spotify.com/v1/me/player/recently-played";
 
 interface SpotifyTokenResponse {
   access_token: string;
@@ -33,6 +33,39 @@ export interface SpotifyTrack {
   playedAt?: string;
   progressMs?: number;
   durationMs?: number;
+}
+
+/** One row from Get Recently Played Tracks (playback timestamp included). */
+export interface RecentlyPlayedTrack {
+  playedAt: string;
+  name: string;
+  artist: string;
+  artistUrl: string;
+  albumArt: string;
+  songUrl: string;
+  explicit?: boolean;
+}
+
+function mapRecentApiTrack(item: {
+  played_at: string;
+  track: {
+    name: string;
+    artists: SpotifyArtist[];
+    album: { images: { url?: string }[] };
+    external_urls: { spotify: string };
+    explicit?: boolean;
+  };
+}): RecentlyPlayedTrack {
+  const track = item.track;
+  return {
+    playedAt: item.played_at,
+    name: track.name,
+    artist: track.artists.map((a) => a.name).join(", "),
+    artistUrl: track.artists[0]?.external_urls?.spotify ?? "",
+    albumArt: track.album.images[0]?.url ?? "",
+    songUrl: track.external_urls.spotify,
+    explicit: Boolean(track.explicit),
+  };
 }
 
 async function getAccessToken(): Promise<string> {
@@ -86,12 +119,15 @@ export async function getNowPlaying(): Promise<SpotifyTrack | null> {
       nowPlayingResponse.status === 404
     ) {
       // Nothing playing, get recently played
-      const recentlyPlayedResponse = await fetch(RECENTLY_PLAYED_ENDPOINT, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        cache: "no-store",
-      });
+      const recentlyPlayedResponse = await fetch(
+        `${RECENTLY_PLAYED_BASE}?limit=1`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          cache: "no-store",
+        }
+      );
 
       if (!recentlyPlayedResponse.ok) {
         return null;
@@ -100,18 +136,16 @@ export async function getNowPlaying(): Promise<SpotifyTrack | null> {
       const recentData = await recentlyPlayedResponse.json();
 
       if (recentData.items && recentData.items.length > 0) {
-        const track = recentData.items[0].track;
+        const first = mapRecentApiTrack(recentData.items[0]);
         return {
-          name: track.name,
-          artist: track.artists
-            .map((artist: SpotifyArtist) => artist.name)
-            .join(", "),
-          artistUrl: track.artists[0]?.external_urls?.spotify || "",
-          albumArt: track.album.images[0]?.url || "",
-          songUrl: track.external_urls.spotify,
+          name: first.name,
+          artist: first.artist,
+          artistUrl: first.artistUrl,
+          albumArt: first.albumArt,
+          songUrl: first.songUrl,
           isPlaying: false,
-          explicit: Boolean(track.explicit),
-          playedAt: recentData.items[0].played_at,
+          explicit: first.explicit,
+          playedAt: first.playedAt,
         };
       }
 
@@ -144,5 +178,42 @@ export async function getNowPlaying(): Promise<SpotifyTrack | null> {
   } catch (error) {
     console.error("Error fetching Spotify data:", error);
     return null;
+  }
+}
+
+/**
+ * Last N play events (max 50 per Spotify). Same API call whether or not something is playing.
+ */
+export async function getRecentlyPlayed(
+  limit = 50
+): Promise<RecentlyPlayedTrack[]> {
+  try {
+    const accessToken = await getAccessToken();
+    const capped = Math.min(Math.max(1, limit), 50);
+    const response = await fetch(
+      `${RECENTLY_PLAYED_BASE}?limit=${capped}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        cache: "no-store",
+      }
+    );
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json();
+    if (!data.items?.length) {
+      return [];
+    }
+
+    return (
+      data.items as Array<Parameters<typeof mapRecentApiTrack>[0]>
+    ).map(mapRecentApiTrack);
+  } catch (error) {
+    console.error("Error fetching recently played:", error);
+    return [];
   }
 }
