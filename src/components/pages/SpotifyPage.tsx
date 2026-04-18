@@ -3,9 +3,14 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { getNowPlaying, type SpotifyTrack } from "@/app/actions/spotify";
-import { extractColorsFromImageUrl, getLuminance } from "@/lib/extractColors";
+import {
+  extractColorsFromImageUrl,
+  shouldUseDarkTextForBackdrop,
+  type AlbumColorResult,
+} from "@/lib/extractColors";
 import type { TextTheme } from "@/lib/extractColorsServer";
-import { buildAlbumBackdropGradient } from "@/lib/albumGradient";
+import { buildAlbumBackdropSurface } from "@/lib/albumGradient";
+import { AlbumBackdrop } from "@/components/AlbumBackdrop";
 
 const IDLE_POLL_MS = 60_000;
 
@@ -26,11 +31,11 @@ const formatMinsAgo = (playedAt: string) => {
 
 function SpotifyPage({
   initialTrack,
-  initialColors,
+  initialAlbumColors,
   initialTextTheme,
 }: {
   initialTrack?: SpotifyTrack | null;
-  initialColors?: [string, string] | null;
+  initialAlbumColors?: AlbumColorResult | null;
   initialTextTheme?: TextTheme | null;
 }) {
   const [track, setTrack] = useState<SpotifyTrack | null>(initialTrack ?? null);
@@ -56,8 +61,8 @@ function SpotifyPage({
   const endFetchedRef = useRef(false);
   const [previousTrackUrl, setPreviousTrackUrl] = useState<string | null>(null);
   const [, setTick] = useState(0);
-  const [gradientColors, setGradientColors] = useState<[string, string] | null>(
-    initialColors ?? null
+  const [albumColors, setAlbumColors] = useState<AlbumColorResult | null>(
+    initialAlbumColors ?? null
   );
   const diskRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<SpotifyTrack | null>(initialTrack ?? null);
@@ -171,7 +176,7 @@ function SpotifyPage({
 
       setTrack(data);
       if (!data) {
-        setGradientColors(null);
+        setAlbumColors(null);
         setDisplayTrack(null);
       } else if (!isTrackChange) {
         setDisplayTrack(data);
@@ -302,16 +307,16 @@ function SpotifyPage({
 
   useEffect(() => {
     if (!track?.albumArt) {
-      setGradientColors(null);
+      setAlbumColors(null);
       return;
     }
     let cancelled = false;
     const albumArt = track.albumArt;
-    extractColorsFromImageUrl(albumArt).then((colors) => {
+    extractColorsFromImageUrl(albumArt).then((result) => {
       if (cancelled || albumArt !== trackRef.current?.albumArt) return;
       requestAnimationFrame(() => {
         if (cancelled || albumArt !== trackRef.current?.albumArt) return;
-        setGradientColors(colors);
+        setAlbumColors(result);
         setDisplayTrack(trackRef.current);
       });
     });
@@ -323,24 +328,23 @@ function SpotifyPage({
   const isInitialTrack =
     initialTrack && displayTrack?.songUrl === initialTrack.songUrl;
   const useInitialTheme =
-    initialTextTheme != null && (isInitialTrack || !gradientColors);
-  const centerLum = gradientColors ? getLuminance(gradientColors[0]) : 0;
-  const edgeLum = gradientColors ? getLuminance(gradientColors[1]) : 0;
+    initialTextTheme != null && (isInitialTrack || !albumColors);
   const isLightBg =
-    gradientColors !== null && (centerLum * 0.7 + edgeLum * 0.3) > 0.3;
-  const textShadow = isLightBg
-    ? "[text-shadow:0_1px_2px_rgba(0,0,0,0.04)]"
-    : "[text-shadow:0_1px_2px_rgba(0,0,0,0.08)]";
+    albumColors !== null &&
+    shouldUseDarkTextForBackdrop(
+      albumColors.theme,
+      albumColors.avgLuminance
+    );
   const textClass = useInitialTheme
     ? initialTextTheme.textClass
     : isLightBg
-      ? `text-black ${textShadow}`
-      : `text-white ${textShadow}`;
+      ? "text-black"
+      : "text-white";
   const artistTextClass = useInitialTheme
     ? initialTextTheme.artistTextClass
     : isLightBg
-      ? `text-black/80 ${textShadow}`
-      : `text-white/80 ${textShadow}`;
+      ? "text-black/80"
+      : "text-white/80";
   const artistOnLightBackground =
     useInitialTheme && initialTextTheme
       ? initialTextTheme.artistTextClass.includes("text-black")
@@ -348,8 +352,16 @@ function SpotifyPage({
   const textMutedClass = useInitialTheme
     ? initialTextTheme.textMutedClass
     : isLightBg
-      ? `text-gray-700 ${textShadow}`
-      : `text-white opacity-50 ${textShadow}`;
+      ? "text-gray-700"
+      : "text-white/70";
+  /** Timestamps: same hue as muted but more opaque */
+  const timeTextClass = useInitialTheme
+    ? initialTextTheme.textMutedClass.includes("text-gray")
+      ? "text-gray-800"
+      : "text-white/88"
+    : isLightBg
+      ? "text-gray-800"
+      : "text-white/88";
   const cardClass = "";
   const skeletonClass = useInitialTheme
     ? initialTextTheme.skeletonClass
@@ -367,21 +379,25 @@ function SpotifyPage({
       ? "bg-black/80"
       : "bg-white";
 
+  const backdropSurface = albumColors
+    ? buildAlbumBackdropSurface(albumColors.strips, albumColors.avgLuminance)
+    : null;
+
   return (
     <div className="w-full max-w-sm overflow-hidden">
       <div
         className="fixed inset-0 -z-20"
-        style={{ background: "#1a1a20" }}
+        style={{
+          background: backdropSurface?.baseColor ?? "#1a1a20",
+        }}
         aria-hidden
       />
-      {gradientColors && (
-        <div
-          className="fixed inset-0 -z-10"
-          style={{
-            backgroundColor: "#1a1a20",
-            backgroundImage: buildAlbumBackdropGradient(gradientColors),
-          }}
-          aria-hidden
+      {backdropSurface && albumColors && (
+        <AlbumBackdrop
+          baseColor={backdropSurface.baseColor}
+          layers={backdropSurface.layers}
+          strips={albumColors.strips}
+          cycleKey={displayTrack?.songUrl ?? initialTrack?.songUrl ?? ""}
         />
       )}
       <div className={`relative z-10 ${cardClass}`}>
@@ -503,7 +519,7 @@ function SpotifyPage({
                   >
                     <div className="flex flex-col items-start w-full gap-0">
                       <h2
-                        className={`text-lg md:text-2xl font-bold inline-block max-w-full truncate cursor-pointer hover:underline leading-tight ${textClass}`}
+                        className={`text-lg md:text-2xl font-normal inline-block max-w-full truncate cursor-pointer hover:underline leading-tight ${textClass}`}
                         onClick={() => window.open(displayTrack.songUrl, "_blank")}
                       >
                         {displayTrack.name}
@@ -518,12 +534,12 @@ function SpotifyPage({
                             aria-label="Explicit"
                             style={{
                               boxSizing: "border-box",
-                              width: "12px",
-                              height: "12px",
-                              minWidth: "12px",
-                              minHeight: "12px",
-                              maxWidth: "12px",
-                              maxHeight: "12px",
+                              width: "10px",
+                              height: "10px",
+                              minWidth: "10px",
+                              minHeight: "10px",
+                              maxWidth: "10px",
+                              maxHeight: "10px",
                               display: "inline-flex",
                               alignItems: "center",
                               justifyContent: "center",
@@ -531,9 +547,9 @@ function SpotifyPage({
                               margin: 0,
                               padding: 0,
                               border: "none",
-                              borderRadius: "3px",
+                              borderRadius: "1.5px",
                               overflow: "hidden",
-                              fontSize: "7px",
+                              fontSize: "6px",
                               fontWeight: 700,
                               lineHeight: 1,
                               letterSpacing: "0.02em",
@@ -575,7 +591,7 @@ function SpotifyPage({
                           />
                         </div>
                         <div
-                          className={`flex justify-between ${textMutedClass}`}
+                          className={`flex justify-between ${timeTextClass}`}
                           style={{
                             fontSize: "10px",
                             lineHeight: 1,

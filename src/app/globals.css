@@ -43,3 +43,34 @@ body {
     transform: rotate(360deg) translateZ(20px);
   }
 }
+
+/* Whole backdrop pans slowly; per-blob color ramps run in JS on each layer. */
+@keyframes album-backdrop-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1.02);
+  }
+  25% {
+    transform: translate3d(-8vw, 4vh, 0) rotate(-2.8deg) scale(1.24);
+  }
+  50% {
+    transform: translate3d(4.5vw, -6vh, 0) rotate(2.2deg) scale(1.11);
+  }
+  75% {
+    transform: translate3d(6.5vw, 3vh, 0) rotate(-2deg) scale(1.2);
+  }
+}
+
+.album-backdrop-drift {
+  transform-origin: center center;
+  animation: album-backdrop-drift 24s ease-in-out infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .album-backdrop-drift {
+    animation: none;
+    transform: scale(1.06);
+    will-change: auto;
+  }
+}
