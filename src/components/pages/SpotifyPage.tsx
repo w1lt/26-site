@@ -9,12 +9,9 @@ import {
 } from "react";
 import { getNowPlaying, type SpotifyTrack } from "@/app/actions/spotify";
 import {
-  albumCoverIsGrayscaleLike,
   extractColorsFromImageUrl,
-  shouldUseDarkTextForBackdrop,
   type AlbumColorResult,
 } from "@/lib/extractColors";
-import type { TextTheme } from "@/lib/extractColorsServer";
 import { buildAlbumBackdropSurface } from "@/lib/albumGradient";
 import { AlbumBackdrop } from "@/components/AlbumBackdrop";
 
@@ -38,11 +35,9 @@ const formatMinsAgo = (playedAt: string) => {
 function SpotifyPage({
   initialTrack,
   initialAlbumColors,
-  initialTextTheme,
 }: {
   initialTrack?: SpotifyTrack | null;
   initialAlbumColors?: AlbumColorResult | null;
-  initialTextTheme?: TextTheme | null;
 }) {
   const [track, setTrack] = useState<SpotifyTrack | null>(initialTrack ?? null);
   const [displayTrack, setDisplayTrack] = useState<SpotifyTrack | null>(
@@ -236,51 +231,21 @@ function SpotifyPage({
   }, [track?.albumArt, initialAlbumColors, initialTrack]);
 
   /**
-   * Only use server text tokens while we have no extracted palette.
-   * If SSR had no colors, `initialTextTheme` is the light-on-dark fallback — once client
-   * extraction fills `albumColors`, we must derive contrast from real luminance or light
-   * covers stay unreadable on a light backdrop.
+   * Backdrop stays dark/cinematic; white text reads consistently. The text column
+   * uses `opacity: 0.8` so labels share one alpha against the gradient.
    */
-  const useInitialTheme = initialTextTheme != null && albumColors === null;
-  const isLightBg =
-    albumColors !== null &&
-    shouldUseDarkTextForBackdrop(
-      albumColors.theme,
-      albumColors.avgLuminance,
-      albumCoverIsGrayscaleLike(albumColors)
-    );
-  /**
-   * All text shares one color class; the whole text column is wrapped in an
-   * `opacity: 0.8` container so every label (title, artist, time, muted) is
-   * rendered at a consistent 80% alpha against the backdrop.
-   */
-  const baseTextColor = useInitialTheme
-    ? initialTextTheme.textClass.includes("text-black")
-      ? "text-black"
-      : "text-white"
-    : isLightBg
-      ? "text-black"
-      : "text-white";
-  const titleTextClass = baseTextColor;
-  const textClass = baseTextColor;
-  const artistTextClass = baseTextColor;
-  const artistOnLightBackground =
-    useInitialTheme && initialTextTheme
-      ? initialTextTheme.artistTextClass.includes("text-black")
-      : isLightBg;
-  const textMutedClass = baseTextColor;
-  const timeTextClass = baseTextColor;
+  const titleTextClass = "text-white";
+  const textClass = "text-white";
+  const artistTextClass = "text-white";
+  /** Explicit badge: white pill on dark UI */
+  const artistOnLightBackground = false;
+  const textMutedClass = "text-white";
+  const timeTextClass = "text-white";
   const cardClass = "";
-  const progressTrackStyle = useInitialTheme
-    ? initialTextTheme.progressTrackStyle
-    : isLightBg
-      ? { backgroundColor: "rgba(127, 131, 136, 0.3)" }
-      : { backgroundColor: "rgba(255, 255, 255, 0.2)" };
-  const progressFillClass = useInitialTheme
-    ? initialTextTheme.progressFillClass
-    : isLightBg
-      ? "bg-black"
-      : "bg-white";
+  const progressTrackStyle = {
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+  };
+  const progressFillClass = "bg-white";
 
   /** Stable per-track seed so each album gets a unique but repeatable blob layout. */
   const backdropSeed =

@@ -93,12 +93,6 @@ export function isGrayscaleArtwork(
   return Math.max(chromaPalette, chromaStrips) < GRAYSCALE_CHROMA_THRESHOLD;
 }
 
-export function albumCoverIsGrayscaleLike(
-  colors: Pick<AlbumColorResult, "strips" | "palette">
-): boolean {
-  return isGrayscaleArtwork(colors.strips, colors.palette);
-}
-
 export type TextTheme = {
   textClass: string;
   /** Song title — slightly more opaque than body text */
@@ -111,71 +105,22 @@ export type TextTheme = {
 };
 
 /**
- * Whether to use dark (black) text vs light text. Prefers **whole-cover** `avgLuminance`
- * because theme swatches are chroma-boosted and can read "light" on very dark art.
- *
- * Grayscale covers are a special case: strips/theme are boosted neutrals but the UI
- * backdrop stays on a dark tinted base with screened accents (`albumGradient`). High
- * photo luminance must not flip to dark text on that still-dark canvas.
+ * UI always uses light-on-dark copy; the album backdrop stays in a dark register.
+ * Extra parameters are ignored but kept so older call sites stay valid.
  */
-export function shouldUseDarkTextForBackdrop(
-  theme: GradientPalette | null,
-  avgLuminance?: number | null,
-  grayscaleCover?: boolean
-): boolean {
-  if (!theme) return false;
-
-  if (grayscaleCover) {
-    return false;
-  }
-
-  const themeBlend =
-    getLuminance(theme[0]) * 0.45 +
-    getLuminance(theme[1]) * 0.3 +
-    getLuminance(theme[2]) * 0.25;
-
-  if (avgLuminance != null && Number.isFinite(avgLuminance)) {
-    const L = Math.max(0, Math.min(1, avgLuminance));
-    if (L < 0.26) return false;
-    if (L > 0.42) return true;
-    const mixed = L * 0.62 + themeBlend * 0.38;
-    return mixed > 0.34;
-  }
-
-  return themeBlend > 0.34;
-}
-
 export function getTextThemeFromColors(
-  colors: GradientPalette | null,
-  avgLuminance?: number | null,
-  grayscaleCover?: boolean
+  _colors?: GradientPalette | null,
+  _avgLuminance?: number | null,
+  _grayscaleCover?: boolean
 ): TextTheme {
-  if (!colors) {
-    return {
-      textClass: "text-white/90",
-      titleTextClass: "text-white/95",
-      artistTextClass: "text-white/90",
-      textMutedClass: "text-white/90",
-      progressTrackStyle: { backgroundColor: "rgba(255, 255, 255, 0.2)" },
-      progressFillClass: "bg-white",
-      skeletonClass: "bg-gray-700",
-    };
-  }
-  const isLightBg = shouldUseDarkTextForBackdrop(
-    colors,
-    avgLuminance,
-    grayscaleCover
-  );
   return {
-    textClass: isLightBg ? "text-black/90" : "text-white/90",
-    titleTextClass: isLightBg ? "text-black/95" : "text-white/95",
-    artistTextClass: isLightBg ? "text-black/90" : "text-white/90",
-    textMutedClass: isLightBg ? "text-gray-700/90" : "text-white/90",
-    progressTrackStyle: isLightBg
-      ? { backgroundColor: "rgba(127, 131, 136, 0.3)" }
-      : { backgroundColor: "rgba(255, 255, 255, 0.2)" },
-    progressFillClass: isLightBg ? "bg-black" : "bg-white",
-    skeletonClass: isLightBg ? "bg-gray-400" : "bg-gray-700",
+    textClass: "text-white",
+    titleTextClass: "text-white",
+    artistTextClass: "text-white",
+    textMutedClass: "text-white",
+    progressTrackStyle: { backgroundColor: "rgba(255, 255, 255, 0.2)" },
+    progressFillClass: "bg-white",
+    skeletonClass: "bg-gray-700",
   };
 }
 
