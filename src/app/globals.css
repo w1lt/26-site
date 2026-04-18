@@ -78,10 +78,42 @@ body {
   will-change: background-position;
 }
 
+/*
+ * Blob layer drift — one cheap GPU transform on the whole composited layer, not per-blob.
+ * Slight translate+scale gives the backdrop the feeling of breathing / camera parallax
+ * without re-rasterizing any gradients (they render once; the transform is free).
+ */
+@keyframes album-blob-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.02);
+  }
+  25% {
+    transform: translate3d(-2.4%, 1.8%, 0) scale(1.05);
+  }
+  50% {
+    transform: translate3d(1.8%, -2.2%, 0) scale(1.03);
+  }
+  75% {
+    transform: translate3d(-1.2%, -1.4%, 0) scale(1.06);
+  }
+}
+
+.album-blob-drift {
+  transform-origin: center center;
+  animation: album-blob-drift 42s ease-in-out infinite;
+  will-change: transform;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .album-palette-wash {
     animation: none;
     background-position: 45% 50%;
+    will-change: auto;
+  }
+  .album-blob-drift {
+    animation: none;
+    transform: scale(1.02);
     will-change: auto;
   }
 }

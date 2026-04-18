@@ -291,16 +291,20 @@ function SpotifyPage({
       ? "bg-black"
       : "bg-white";
 
+  /** Stable per-track seed so each album gets a unique but repeatable blob layout. */
+  const backdropSeed =
+    displayTrack?.albumArt ?? initialTrack?.albumArt ?? null;
   const backdropSurface = useMemo(
     () =>
       albumColors
         ? buildAlbumBackdropSurface(
             albumColors.strips,
             albumColors.avgLuminance,
-            albumColors.palette ?? []
+            albumColors.palette ?? [],
+            backdropSeed
           )
         : null,
-    [albumColors]
+    [albumColors, backdropSeed]
   );
 
   return (

@@ -35,7 +35,7 @@ export function AlbumBackdrop({
       )}
       {blobs.length > 0 && (
         <div
-          className="absolute inset-0"
+          className="album-blob-drift absolute inset-0"
           style={{
             backgroundImage: blobs.join(", "),
             // All blob layers composite additively — overlapping colors brighten
