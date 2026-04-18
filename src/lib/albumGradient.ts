@@ -9,18 +9,24 @@ function stripAt(strips: readonly string[], t: number): string {
   return strips[i];
 }
 
-/** Mix a strip color toward transparent — used for soft radial blooms. */
+/**
+ * Mix a strip color toward transparent — used for soft radial blooms.
+ * Uses `oklab` interpolation so mid-gradient samples keep chroma instead of desaturating
+ * toward neutral (the "mixing two colors goes gray" problem in sRGB).
+ */
 function mixTransparent(hex: string, colorPct: number): string {
-  const p = Math.max(8, Math.min(72, Math.round(colorPct)));
-  return `color-mix(in srgb, ${hex} ${p}%, transparent)`;
+  const p = Math.max(8, Math.min(78, Math.round(colorPct)));
+  return `color-mix(in oklab, ${hex} ${p}%, transparent)`;
 }
 
 /**
  * Dark / moody covers: dampen blooms vs bright art, but leave enough chroma for hue to read.
+ * Slightly higher floor than before because blob layers now composite with `screen`,
+ * which darkens individual layers a bit (they add to each other instead of averaging).
  */
 function bloomStrength(avgLum: number): number {
   const x = Math.max(0, Math.min(1, avgLum));
-  return 0.31 + 0.69 * Math.pow(x, 0.46);
+  return 0.42 + 0.62 * Math.pow(x, 0.46);
 }
 
 function mixBloom(hex: string, rawPct: number, avgLum: number): string {
@@ -28,23 +34,24 @@ function mixBloom(hex: string, rawPct: number, avgLum: number): string {
   return mixTransparent(hex, p);
 }
 
-/** Opacity of the stacked gradient layer (fixed 0.42 was too much on near-black covers). */
+/** Opacity of the stacked color-blob layer. Screen blending tolerates more opacity. */
 export function gradientLayerOpacity(avgLum: number): number {
   const L = Math.max(0, Math.min(1, avgLum));
-  return Math.min(0.48, Math.max(0.16, 0.14 + 0.38 * Math.pow(L, 0.55)));
+  return Math.min(0.82, Math.max(0.42, 0.38 + 0.46 * Math.pow(L, 0.55)));
 }
 
 /**
  * Muted base fill: avoids near-pure black and near-pure white; slight purple-gray bias.
- * Slightly higher gamma on the curve so low-luminance art stays darker before lifting to gray.
+ * Darker than before because blobs will `screen` on top and need a dark substrate to
+ * look vibrant (iOS Now Playing uses the same trick — very dark base, saturated blooms).
  */
 export function backdropBaseColor(avgLuminance: number): string {
   const lum = Math.max(0, Math.min(1, avgLuminance));
-  const tLinear = (lum - 0.05) / 0.62;
-  const t = Math.pow(Math.max(0, Math.min(1, tLinear)), 0.8);
-  const r = Math.round(32 + (212 - 32) * t);
-  const g = Math.round(30 + (214 - 30) * t);
-  const b = Math.round(44 + (218 - 44) * t);
+  const tLinear = (lum - 0.05) / 0.68;
+  const t = Math.pow(Math.max(0, Math.min(1, tLinear)), 0.9);
+  const r = Math.round(18 + (168 - 18) * t);
+  const g = Math.round(17 + (170 - 17) * t);
+  const b = Math.round(26 + (176 - 26) * t);
   return rgbToHex(r, g, b);
 }
 
@@ -58,11 +65,11 @@ function tintedBackdropBase(
 ): string {
   const base = backdropBaseColor(avgLum);
   if (strips.length === 0) return base;
-  if (avgLum < 0.09 || avgLum > 0.5) return base;
+  if (avgLum < 0.06 || avgLum > 0.55) return base;
   const t = Math.max(0, Math.min(1, (0.42 - avgLum) / 0.33));
-  const pct = Math.round(3 + t * 9);
+  const pct = Math.round(4 + t * 10);
   const accent = stripAt(strips, 0.5);
-  return `color-mix(in srgb, ${base} ${100 - pct}%, ${accent} ${pct}%)`;
+  return `color-mix(in oklab, ${base} ${100 - pct}%, ${accent} ${pct}%)`;
 }
 
 function averageStripLuminance(strips: readonly string[]): number {
@@ -76,14 +83,22 @@ function averageStripLuminance(strips: readonly string[]): number {
 function vignetteEdgeColor(strips: readonly string[]): string {
   const a = stripAt(strips, 0.42);
   const b = stripAt(strips, 0.58);
-  return `color-mix(in srgb, ${a} 50%, ${b} 50%)`;
+  return `color-mix(in oklab, ${a} 50%, ${b} 50%)`;
 }
 
 export type AlbumBackdropSurface = {
   baseColor: string;
-  /** One `background-image` gradient each, bottom → top paint order (for stacked divs) */
-  layers: readonly string[];
-  /** Dark covers use a dimmer overlay so blooms don’t wash the scene. */
+  /**
+   * Color-blob gradients, painted with `background-blend-mode: screen` so overlaps
+   * brighten chromatically instead of averaging to gray.
+   */
+  blobs: readonly string[];
+  /**
+   * Top vignette (painted as a separate layer, `mix-blend-mode: normal`) so it
+   * actually darkens the edges instead of being hidden under the blobs.
+   */
+  vignette: string | null;
+  /** Opacity for the whole blob layer (tunes intensity for dark covers). */
   gradientOpacity: number;
   /** Slow-moving wash from distinct palette swatches (optional). */
   paletteWash: { backgroundImage: string; opacity: number } | null;
@@ -95,7 +110,7 @@ export function buildPaletteWash(
   avgLum: number
 ): { backgroundImage: string; opacity: number } | null {
   if (palette.length < 3) return null;
-  const mixPct = Math.round(56 + avgLum * 38);
+  const mixPct = Math.round(58 + avgLum * 36);
   const mkLoop = (hexes: readonly string[]) => {
     const loop = [...hexes];
     if (loop[0] !== loop[loop.length - 1]) loop.push(loop[0]);
@@ -103,7 +118,7 @@ export function buildPaletteWash(
     return loop.map((hex, i) => {
       const t = n <= 1 ? 0 : i / (n - 1);
       const pos = (t * 100).toFixed(1);
-      return `color-mix(in srgb, ${hex} ${mixPct}%, transparent) ${pos}%`;
+      return `color-mix(in oklab, ${hex} ${mixPct}%, transparent) ${pos}%`;
     });
   };
 
@@ -122,15 +137,17 @@ export function buildPaletteWash(
           ]
         : [...palette];
 
-  const g1 = `linear-gradient(132deg, ${mkLoop(a).join(", ")})`;
-  const g2 = `linear-gradient(48deg, ${mkLoop(bStops).join(", ")})`;
+  // `in oklab` gradient interpolation keeps the midpoint saturated instead of going gray.
+  const g1 = `linear-gradient(in oklab, 132deg, ${mkLoop(a).join(", ")})`;
+  const g2 = `linear-gradient(in oklab, 48deg, ${mkLoop(bStops).join(", ")})`;
   const backgroundImage = `${g1}, ${g2}`;
-  const opacity = Math.min(0.58, 0.26 + avgLum * 0.34);
+  const opacity = Math.min(0.48, 0.2 + avgLum * 0.3);
   return { backgroundImage, opacity };
 }
 
 /**
- * Layered radial blooms + a faint vertical wash. Each layer can be animated separately.
+ * Large soft color blobs meant to be composited with `screen`. Each blob goes
+ * `color → transparent` in `oklab` so the falloff keeps chroma at the edges.
  */
 export function buildAlbumBackdropSurface(
   strips: readonly string[],
@@ -148,107 +165,79 @@ export function buildAlbumBackdropSurface(
     palette && palette.length >= 3 ? buildPaletteWash(palette, lum) : null;
 
   if (strips.length === 0) {
-    return { baseColor, layers: [], gradientOpacity, paletteWash };
+    return {
+      baseColor,
+      blobs: [],
+      vignette: null,
+      gradientOpacity,
+      paletteWash,
+    };
   }
 
-  const vignetteMix =
-    1 - Math.pow(Math.max(0, Math.min(1, (lum - 0.04) / 0.66)), 0.84);
-  const edgeStrength = Math.round(14 + vignetteMix * 40);
-  const chromEdge = vignetteEdgeColor(strips);
-  const edgeTint = `color-mix(in srgb, ${chromEdge} 40%, rgb(52 50 64) 60%)`;
+  const blobs: string[] = [];
 
-  // Back layers first in array = painted first = behind; last entries = on top.
-  const back: string[] = [];
+  // Pick a blob color biased toward the palette (more distinct hues) with strip fallback.
+  const paletteFor = (idx: number, fallbackT: number) => {
+    if (palette && palette.length > 0) {
+      return palette[idx % palette.length];
+    }
+    return stripAt(strips, fallbackT);
+  };
 
-  // Back: subtle vertical flow (low contrast, ties top→bottom without a hard linear band)
-  if (strips.length >= 2) {
-    back.push(
-      `linear-gradient(184deg, ${mixBloom(stripAt(strips, 0), 20, lum)} 0%, transparent 30%, ${mixBloom(
-        stripAt(strips, 0.5),
-        16,
-        lum
-      )} 50%, transparent 70%, ${mixBloom(stripAt(strips, 1), 18, lum)} 100%)`
-    );
-  }
-
-  // Large soft radial “body”
-  back.push(
-    `radial-gradient(ellipse 145% 118% at 44% 40%, ${mixBloom(
-      stripAt(strips, 0.35),
-      26,
+  // 5 large blobs at asymmetric positions. Under `screen`, overlaps brighten toward
+  // combined hue; gaps between blobs stay dark (the iOS "seam" look).
+  blobs.push(
+    `radial-gradient(ellipse 118% 96% at 18% 22%, ${mixBloom(
+      paletteFor(0, 0.12),
+      60,
       lum
     )} 0%, transparent 58%)`
   );
-
-  // Bottom-heavy glow
-  back.push(
-    `radial-gradient(ellipse 92% 82% at 52% 96%, ${mixBloom(
-      stripAt(strips, 0.9),
-      44,
-      lum
-    )} 0%, transparent 58%)`
-  );
-
-  // Top glow
-  back.push(
-    `radial-gradient(ellipse 96% 76% at 50% 6%, ${mixBloom(
-      stripAt(strips, 0.08),
-      42,
-      lum
-    )} 0%, transparent 54%)`
-  );
-
-  // Side accents (asymmetric = more organic)
-  back.push(
-    `radial-gradient(ellipse 74% 60% at 12% 36%, ${mixBloom(
-      stripAt(strips, 0.18),
-      46,
+  blobs.push(
+    `radial-gradient(ellipse 104% 88% at 84% 30%, ${mixBloom(
+      paletteFor(1, 0.3),
+      58,
       lum
     )} 0%, transparent 56%)`
   );
-  back.push(
-    `radial-gradient(ellipse 70% 56% at 90% 40%, ${mixBloom(
-      stripAt(strips, 0.65),
-      44,
+  blobs.push(
+    `radial-gradient(ellipse 124% 96% at 22% 82%, ${mixBloom(
+      paletteFor(2, 0.78),
+      62,
       lum
-    )} 0%, transparent 54%)`
+    )} 0%, transparent 58%)`
   );
-
-  // Mid-depth radial
-  back.push(
-    `radial-gradient(ellipse 88% 72% at 55% 52%, ${mixBloom(
-      stripAt(strips, 0.5),
-      22,
+  blobs.push(
+    `radial-gradient(ellipse 110% 88% at 82% 78%, ${mixBloom(
+      paletteFor(3, 0.92),
+      58,
+      lum
+    )} 0%, transparent 56%)`
+  );
+  // Center ambient blob so the middle doesn't dip to base color between the 4 corners.
+  blobs.push(
+    `radial-gradient(ellipse 92% 76% at 50% 50%, ${mixBloom(
+      paletteFor(4, 0.5),
+      42,
       lum
     )} 0%, transparent 62%)`
   );
 
-  // Extra hue pockets (strip positions we rarely stack) — low raw % so dark covers stay dim
-  if (strips.length >= 3) {
-    back.push(
-      `linear-gradient(128deg, transparent 22%, ${mixBloom(
-        stripAt(strips, 0.33),
-        15,
-        lum
-      )} 50%, transparent 78%)`
-    );
-  }
-  back.push(
-    `radial-gradient(ellipse 118% 96% at 26% 68%, ${mixBloom(
-      stripAt(strips, 0.28),
-      23,
-      lum
-    )} 0%, transparent 56%)`
-  );
-
-  // Front: chromatic vignette (replaces pure black edge)
-  back.push(
-    `radial-gradient(ellipse 108% 102% at 50% 50%, transparent 42%, color-mix(in srgb, ${edgeTint} ${edgeStrength}%, transparent) 100%)`
-  );
+  // Chromatic edge vignette — painted as a separate layer on top, NOT screened,
+  // so it actually tucks the edges darker. (Previous code had this bundled with
+  // the color blobs, which meant it was either a no-op under `normal` or got
+  // inverted under `screen`.)
+  const vignetteMix =
+    1 - Math.pow(Math.max(0, Math.min(1, (lum - 0.04) / 0.66)), 0.84);
+  const edgeStrength = Math.round(20 + vignetteMix * 48);
+  const chromEdge = vignetteEdgeColor(strips);
+  const edgeTint = `color-mix(in oklab, ${chromEdge} 36%, rgb(14 12 22) 64%)`;
+  const vignette = `radial-gradient(ellipse 108% 102% at 50% 50%, transparent 44%, color-mix(in oklab, ${edgeTint} ${edgeStrength}%, transparent) 100%)`;
 
   return {
     baseColor,
-    layers: back,
+    blobs,
+    vignette,
     gradientOpacity,
     paletteWash,
   };

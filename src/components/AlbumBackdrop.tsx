@@ -1,42 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import type { AlbumBackdropSurface } from "@/lib/albumGradient";
-import { OrganicFloatingBlobs } from "@/components/OrganicFloatingBlobs";
-
-function usePrefersReducedMotion() {
-  const [reduce, setReduce] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduce(mq.matches);
-    const fn = () => setReduce(mq.matches);
-    mq.addEventListener("change", fn);
-    return () => mq.removeEventListener("change", fn);
-  }, []);
-  return reduce;
-}
 
 export function AlbumBackdrop({
   baseColor,
-  layers,
+  blobs,
+  vignette,
   gradientOpacity,
   paletteWash,
-  strips,
-  cycleKey,
 }: Pick<
   AlbumBackdropSurface,
-  "baseColor" | "layers" | "gradientOpacity" | "paletteWash"
-> & {
-  strips: readonly string[];
-  cycleKey: string;
-}) {
-  const prefersReducedMotion = usePrefersReducedMotion();
-  const animate = !prefersReducedMotion;
-
+  "baseColor" | "blobs" | "vignette" | "gradientOpacity" | "paletteWash"
+>) {
   return (
     <div
-      className="album-backdrop-drift pointer-events-none fixed inset-0 -z-10 overflow-hidden"
-      style={{ backgroundColor: baseColor, contain: "strict" }}
+      className="pointer-events-none fixed inset-0 -z-10 min-h-[100dvh] w-full overflow-hidden"
+      style={{
+        backgroundColor: baseColor,
+        // Needed so `mix-blend-mode` on children composites against this container's
+        // backdrop only, not the rest of the page.
+        isolation: "isolate",
+      }}
       aria-hidden
     >
       {paletteWash && (
@@ -45,23 +29,41 @@ export function AlbumBackdrop({
           style={{
             backgroundImage: paletteWash.backgroundImage,
             opacity: paletteWash.opacity,
+            mixBlendMode: "screen",
           }}
         />
       )}
-      {layers.length > 0 && (
+      {blobs.length > 0 && (
         <div
           className="absolute inset-0"
           style={{
-            backgroundImage: layers.join(", "),
+            backgroundImage: blobs.join(", "),
+            // All blob layers composite additively — overlapping colors brighten
+            // toward their combined hue (red + blue → magenta) rather than averaging
+            // to neutral gray.
+            backgroundBlendMode: blobs.map(() => "screen").join(", "),
+            mixBlendMode: "screen",
             opacity: gradientOpacity,
           }}
         />
       )}
-      <OrganicFloatingBlobs
-        strips={strips}
-        animate={animate}
-        cycleKey={cycleKey}
+      {/* Perlin-like fractal noise → organic brightness variation so large
+          color fields don't read as flat plastic. Layered with `overlay` so mid-gray
+          is a no-op; darker/brighter specks push the backdrop around ±10%. */}
+      <div
+        className="album-noise absolute inset-0"
+        style={{ mixBlendMode: "overlay", opacity: 0.22 }}
       />
+      {vignette && (
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage: vignette,
+            // `normal` on top: this one is meant to darken the edges, not brighten.
+            mixBlendMode: "normal",
+          }}
+        />
+      )}
     </div>
   );
 }
