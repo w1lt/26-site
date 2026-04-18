@@ -1,8 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Drawer } from "vaul";
 import type { RecentlyPlayedTrack } from "@/app/actions/spotify";
+
+/** Client-only: skip refetch when reopening the drawer within this window. */
+const HISTORY_CACHE_MS = 5 * 60 * 1000;
 
 function formatPlayedAt(iso: string): string {
   const played = new Date(iso).getTime();
@@ -59,25 +62,49 @@ export function RecentTracksDrawer({
   const [items, setItems] = useState<RecentlyPlayedTrack[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const cacheRef = useRef<{ items: RecentlyPlayedTrack[]; fetchedAt: number } | null>(
+    null
+  );
 
-  const load = useCallback(async () => {
-    setItems(null);
-    setLoading(true);
-    setError(false);
-    try {
-      const data = await fetchRecent();
-      setItems(data);
-    } catch {
-      setError(true);
-      setItems([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [fetchRecent]);
+  const load = useCallback(
+    async (mode: "initial" | "refresh") => {
+      if (mode === "initial") {
+        setItems(null);
+      }
+      setLoading(true);
+      setError(false);
+      try {
+        const data = await fetchRecent();
+        setItems(data);
+        cacheRef.current = { items: data, fetchedAt: Date.now() };
+      } catch {
+        if (mode === "initial") {
+          setError(true);
+          setItems([]);
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [fetchRecent]
+  );
 
   useEffect(() => {
     if (!open) return;
-    load();
+
+    const c = cacheRef.current;
+    const fresh =
+      c !== null && Date.now() - c.fetchedAt < HISTORY_CACHE_MS;
+
+    if (fresh) {
+      setItems(c.items);
+      setError(false);
+      setLoading(false);
+      return;
+    }
+
+    const hasCachedRows = c !== null && c.items.length > 0;
+    load(hasCachedRows ? "refresh" : "initial");
   }, [open, load]);
 
   return (
@@ -133,7 +160,7 @@ export function RecentTracksDrawer({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch]">
-            {loading && (
+            {loading && items === null && (
               <ul className="space-y-3 px-1 pb-4">
                 {Array.from({ length: 8 }).map((_, i) => (
                   <li
