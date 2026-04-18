@@ -1,6 +1,7 @@
 import sharp from "sharp";
 import {
   extractAlbumColors,
+  EXTRACT_THUMB_SIZE,
   type AlbumColorResult,
 } from "./extractColors";
 
@@ -22,7 +23,7 @@ export async function extractColorsFromImageUrlServer(
 
     const buffer = await res.arrayBuffer();
     const { data, info } = await sharp(Buffer.from(buffer))
-      .resize(100, 100)
+      .resize(EXTRACT_THUMB_SIZE, EXTRACT_THUMB_SIZE)
       .ensureAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true });

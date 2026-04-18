@@ -52,6 +52,8 @@ export type AlbumColorResult = {
   theme: GradientPalette;
   /** Mean relative luminance (0–1) over opaque pixels — how bright the cover is overall */
   avgLuminance: number;
+  /** Distinct high-scoring chromatic swatches (not band-averaged) — for animated palette wash */
+  palette: string[];
 };
 
 export type TextTheme = {
@@ -122,10 +124,24 @@ export function getTextThemeFromColors(
 
 export const STRIP_COUNT = 8;
 
+/**
+ * Downscaled size used for palette/strip analysis (not device screen pixels).
+ * Larger ⇒ more sample points vs. cover detail so picks stay **distinct** rather than smeared.
+ */
+export const EXTRACT_THUMB_SIZE = 128;
+
 function themeFromStrips(strips: string[]): GradientPalette {
   if (strips.length === 0) return ["#2e2c38", "#2e2c38", "#2e2c38"];
   const mid = Math.floor(strips.length / 2);
   return [strips[0], strips[mid], strips[strips.length - 1]] as const;
+}
+
+function themeFromPalette(palette: string[]): GradientPalette {
+  if (palette.length === 0) return ["#2e2c38", "#2e2c38", "#2e2c38"];
+  if (palette.length === 1) return [palette[0], palette[0], palette[0]];
+  if (palette.length === 2) return [palette[0], palette[1], palette[1]];
+  const mid = Math.floor(palette.length / 2);
+  return [palette[0], palette[mid], palette[palette.length - 1]] as const;
 }
 
 /** Reject near-black, near-white, and very low saturation — we only want main chromatic colors. */
@@ -135,9 +151,14 @@ function isChromaticPixel(r: number, g: number, b: number): boolean {
   const saturation = max === 0 ? 0 : (max - min) / max;
   const bright = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
   if (saturation < 0.1) return false;
-  if (max < 44 && bright < 0.2) return false;
+  /**
+   * Old rule `max < 44 && bright < 0.2` dropped **dark saturated reds** (R channel often under ~44 on black posters).
+   * Only treat very dark + low-chroma as mud.
+   */
+  if (max < 44 && bright < 0.2 && saturation < 0.38) return false;
   if (min > 238 && bright > 0.85) return false;
-  if (bright < 0.09) return false;
+  /** Near-black without chroma — skip; allow dark **saturated** primaries (typography, deep reds). */
+  if (bright < 0.085 && saturation < 0.42) return false;
   if (bright > 0.92) return false;
   return true;
 }
@@ -188,6 +209,234 @@ function pixelScore(
   );
 }
 
+/**
+ * No radial “center wins” bias — use for grid / whole-image picks so edges and corners
+ * contribute (closer to full-artwork sampling like system now-playing UIs).
+ */
+function pixelScoreRegional(r: number, g: number, b: number): number {
+  if (!isChromaticPixel(r, g, b)) return -1;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const brightness = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
+  const saturation = max === 0 ? 0 : (max - min) / max;
+  if (saturation < 0.07) return -1;
+  /**
+   * Bright mid-tones used to dominate (e.g. center blue title) over **dark saturated** edge reds.
+   * Bonus term lifts high-chroma, lower-luminance picks so poster typography still wins cells/bands.
+   */
+  const deepChroma =
+    saturation > 0.62 && brightness > 0.038 && brightness < 0.44
+      ? (0.4 - brightness) * saturation * 0.52
+      : 0;
+  const lum = 0.3 + brightness * 0.58 + deepChroma;
+  return Math.pow(saturation, 2.85) * lum * (0.86 + saturation * 0.22);
+}
+
+function colorDistanceSq(
+  r1: number,
+  g1: number,
+  b1: number,
+  r2: number,
+  g2: number,
+  b2: number
+): number {
+  const dr = r1 - r2;
+  const dg = g1 - g2;
+  const db = b1 - b2;
+  return dr * dr + dg * dg + db * db;
+}
+
+const PALETTE_MAX = 12;
+/** Finer grid → more spatially distinct swatches (closer to full-image sampling). */
+const SPATIAL_GRID = 5;
+const PALETTE_MIN_DIST_SQ = 28 * 28;
+
+function hueDistance(r1: number, g1: number, b1: number, r2: number, g2: number, b2: number): number {
+  const h1 = rgbToHue(r1, g1, b1);
+  const h2 = rgbToHue(r2, g2, b2);
+  const d = Math.abs(h1 - h2);
+  return Math.min(d, 360 - d);
+}
+
+function rgbToHue(r: number, g: number, b: number): number {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  if (d < 1e-6) return 0;
+  let h = 0;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return h * 60;
+}
+
+/** ~15° bins — enough to split red vs blue, not so many that sparse accents fragment. */
+const HUE_BIN_SIZE = 15;
+const HUE_BIN_COUNT = Math.ceil(360 / HUE_BIN_SIZE);
+
+function hueBinIndex(r: number, g: number, b: number): number {
+  const h = rgbToHue(r, g, b);
+  let bidx = Math.floor(h / HUE_BIN_SIZE);
+  if (bidx < 0) bidx = 0;
+  if (bidx >= HUE_BIN_COUNT) bidx = HUE_BIN_COUNT - 1;
+  return bidx;
+}
+
+type ScoredSample = { r: number; g: number; b: number; score: number };
+
+/**
+ * Hue bins decide **which family** wins (coverage beats sparse neon).
+ * The returned RGB is a **real scored pixel** from that family — not channel medians (those read as muddy “averages”).
+ */
+function pickRepresentativeByHueCoverage(
+  samples: ScoredSample[]
+): ScoredSample | null {
+  if (samples.length === 0) return null;
+  if (samples.length === 1) return samples[0]!;
+
+  const byBin = new Map<number, ScoredSample[]>();
+  for (const p of samples) {
+    const bi = hueBinIndex(p.r, p.g, p.b);
+    const list = byBin.get(bi);
+    if (list) list.push(p);
+    else byBin.set(bi, [p]);
+  }
+
+  let bestBin = -1;
+  let bestMass = -1;
+  for (const [bi, arr] of byBin) {
+    let mass = 0;
+    for (const p of arr) {
+      mass += 1 + Math.sqrt(Math.max(0, p.score));
+    }
+    if (mass > bestMass) {
+      bestMass = mass;
+      bestBin = bi;
+    }
+  }
+
+  const winners = byBin.get(bestBin);
+  if (!winners || winners.length === 0) return samples[0]!;
+
+  /** Strongest chroma sample in the winning bin (ties: stable order). */
+  let pick = winners[0]!;
+  for (let i = 1; i < winners.length; i++) {
+    const p = winners[i]!;
+    if (p.score > pick.score) pick = p;
+  }
+  return { r: pick.r, g: pick.g, b: pick.b, score: pick.score };
+}
+
+function collectScoredSamplesInRect(
+  data: Uint8Array | Uint8ClampedArray,
+  width: number,
+  height: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  step: number
+): ScoredSample[] {
+  const out: ScoredSample[] = [];
+  for (let y = y0; y < y1; y += step) {
+    for (let x = x0; x < x1; x += step) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] < 128) continue;
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const sc = pixelScoreRegional(r, g, b);
+      if (sc > 0) out.push({ r, g, b, score: sc });
+    }
+  }
+  return out;
+}
+
+function bestPixelInRect(
+  data: Uint8Array | Uint8ClampedArray,
+  width: number,
+  height: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  step: number
+): { r: number; g: number; b: number; score: number } | null {
+  const samples = collectScoredSamplesInRect(
+    data,
+    width,
+    height,
+    x0,
+    y0,
+    x1,
+    y1,
+    step
+  );
+  return pickRepresentativeByHueCoverage(samples);
+}
+
+/**
+ * One winner per grid cell (row-major order) so the wash follows the artwork spatially,
+ * with deduping that prefers hue separation — not a global average.
+ */
+export function extractDistinctPalette(
+  imageData: ImageData | PixelBuffer,
+  maxColors: number = PALETTE_MAX
+): string[] {
+  const { data, width, height } = imageData;
+  /** Finer step on the analysis thumb so cells see real edge/detail, not one blended block */
+  const step = Math.max(2, Math.floor(Math.min(width, height) / 32));
+
+  const cellW = width / SPATIAL_GRID;
+  const cellH = height / SPATIAL_GRID;
+  const ordered: { r: number; g: number; b: number; score: number }[] = [];
+
+  for (let gy = 0; gy < SPATIAL_GRID; gy++) {
+    for (let gx = 0; gx < SPATIAL_GRID; gx++) {
+      const x0 = Math.floor(gx * cellW);
+      const y0 = Math.floor(gy * cellH);
+      const x1 = gx === SPATIAL_GRID - 1 ? width : Math.floor((gx + 1) * cellW);
+      const y1 = gy === SPATIAL_GRID - 1 ? height : Math.floor((gy + 1) * cellH);
+      const best = bestPixelInRect(data, width, height, x0, y0, x1, y1, step);
+      if (best) ordered.push(best);
+    }
+  }
+
+  if (ordered.length === 0) return [];
+
+  const deduped: { r: number; g: number; b: number }[] = [];
+  for (const c of ordered) {
+    if (deduped.length >= maxColors) break;
+    const tooClose = deduped.some((p) => {
+      const dsq = colorDistanceSq(p.r, p.g, p.b, c.r, c.g, c.b);
+      const dh = hueDistance(p.r, p.g, p.b, c.r, c.g, c.b);
+      return dsq < 26 * 26 && dh < 16;
+    });
+    if (!tooClose) deduped.push({ r: c.r, g: c.g, b: c.b });
+  }
+
+  if (deduped.length < 3) {
+    for (const c of ordered) {
+      if (deduped.length >= maxColors) break;
+      const dup = deduped.some(
+        (p) => colorDistanceSq(p.r, p.g, p.b, c.r, c.g, c.b) < 20 * 20
+      );
+      if (!dup) deduped.push({ r: c.r, g: c.g, b: c.b });
+    }
+  }
+
+  const out: string[] = [];
+  for (const p of deduped) {
+    const [sr, sg, sb] = saturateRgb(p.r, p.g, p.b, 1.22);
+    const [cr, cg, cb] = clampChromaticRgb(sr * 1.06, sg * 1.06, sb * 1.06);
+    out.push(rgbToHex(cr, cg, cb));
+  }
+  return out;
+}
+
 function globalBrightnessBoost(
   data: Uint8Array | Uint8ClampedArray,
   width: number,
@@ -221,17 +470,14 @@ function stripBrightnessSpread(r: number, g: number, b: number): number {
 
 /**
  * Sample `stripCount` horizontal bands (top → bottom of cover art).
- * Each band: average of highest-scoring saturated pixels; falls back to raw average if needed.
+ * Each band: best regional chroma sample (no center bias); fallbacks average loose pixels if needed.
  */
 export function extractVerticalStripColors(
   imageData: ImageData | PixelBuffer,
   stripCount: number = STRIP_COUNT
 ): string[] {
   const { data, width, height } = imageData;
-  const step = Math.max(2, Math.floor(Math.min(width, height) / 14));
-  const cx = width / 2;
-  const cy = height / 2;
-  const maxRadius = Math.min(width, height) / 2;
+  const step = Math.max(2, Math.floor(Math.min(width, height) / 16));
   const boost = globalBrightnessBoost(data, width, height, step);
 
   const strips: string[] = [];
@@ -254,7 +500,7 @@ export function extractVerticalStripColors(
         if (a < 128) continue;
         if (isChromaticPixel(r, g, b)) fallbackChroma.push({ r, g, b });
         if (isAcceptableFallbackPixel(r, g, b)) fallbackLoose.push({ r, g, b });
-        const sc = pixelScore(r, g, b, cx, cy, x, y, maxRadius);
+        const sc = pixelScoreRegional(r, g, b);
         if (sc >= 0) scored.push({ r, g, b, score: sc });
       }
     }
@@ -263,13 +509,16 @@ export function extractVerticalStripColors(
     let g: number;
     let b: number;
 
-    if (scored.length >= 4) {
-      scored.sort((a, b) => b.score - a.score);
-      const take = Math.max(3, Math.ceil(scored.length * 0.22));
-      const slice = scored.slice(0, take);
-      r = slice.reduce((acc, p) => acc + p.r, 0) / slice.length;
-      g = slice.reduce((acc, p) => acc + p.g, 0) / slice.length;
-      b = slice.reduce((acc, p) => acc + p.b, 0) / slice.length;
+    if (scored.length >= 1) {
+      /** Hue-coverage winner: dominant family in the band, not one neon outlier pixel */
+      const top = pickRepresentativeByHueCoverage(scored);
+      if (!top) {
+        strips.push(s > 0 ? strips[s - 1] : "#3a3848");
+        continue;
+      }
+      r = top.r;
+      g = top.g;
+      b = top.b;
     } else if (fallbackChroma.length > 0) {
       r = fallbackChroma.reduce((acc, p) => acc + p.r, 0) / fallbackChroma.length;
       g = fallbackChroma.reduce((acc, p) => acc + p.g, 0) / fallbackChroma.length;
@@ -283,9 +532,9 @@ export function extractVerticalStripColors(
       continue;
     }
 
-    const [sr, sg, sb] = saturateRgb(r, g, b, 1.2);
+    const [sr, sg, sb] = saturateRgb(r, g, b, 1.1);
     const stripSpread = stripBrightnessSpread(r, g, b);
-    const combined = Math.min(1.48, boost * stripSpread) * 1.06;
+    const combined = Math.min(1.4, boost * stripSpread) * 1.04;
     const [cr, cg, cb] = clampChromaticRgb(
       sr * combined,
       sg * combined,
@@ -329,8 +578,11 @@ export function extractAlbumColors(
   imageData: ImageData | PixelBuffer
 ): AlbumColorResult {
   const strips = extractVerticalStripColors(imageData, STRIP_COUNT);
+  const palette = extractDistinctPalette(imageData, PALETTE_MAX);
   const avgLuminance = sampleMeanLuminance(imageData);
-  return { strips, theme: themeFromStrips(strips), avgLuminance };
+  const theme =
+    palette.length >= 3 ? themeFromPalette(palette) : themeFromStrips(strips);
+  return { strips, theme, avgLuminance, palette };
 }
 
 export function extractColorsFromImageUrl(
@@ -341,7 +593,7 @@ export function extractColorsFromImageUrl(
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement("canvas");
-      const size = 100;
+      const size = EXTRACT_THUMB_SIZE;
       canvas.width = size;
       canvas.height = size;
       const ctx = canvas.getContext("2d");

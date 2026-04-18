@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+} from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { getNowPlaying, type SpotifyTrack } from "@/app/actions/spotify";
 import {
@@ -67,69 +73,111 @@ function SpotifyPage({
   const diskRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<SpotifyTrack | null>(initialTrack ?? null);
   const tiltTargetRef = useRef({ rotateX: 0, rotateY: 0 });
+  const tiltAnimRef = useRef({ rotateX: 0, rotateY: 0 });
+  const tiltRafPending = useRef(false);
+  const pointerCoalesceRaf = useRef<number | null>(null);
+  const pendingPointerRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     trackRef.current = track;
   }, [track]);
 
-  const updateTiltFromPointer = useCallback((clientX: number, clientY: number) => {
-    const el = diskRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    const radius = Math.min(rect.width, rect.height) / 2;
+  const runTiltFrame = useCallback(() => {
+    const TILT_LERP = 0.14;
+    const target = tiltTargetRef.current;
+    let { rotateX, rotateY } = tiltAnimRef.current;
+    rotateX += (target.rotateX - rotateX) * TILT_LERP;
+    rotateY += (target.rotateY - rotateY) * TILT_LERP;
+    tiltAnimRef.current = { rotateX, rotateY };
 
-    const dx = clientX - centerX;
-    const dy = clientY - centerY;
-    const distFromCenter = Math.sqrt(dx * dx + dy * dy);
-    const closeness = Math.max(0, 1 - distFromCenter / radius);
-    const strength = Math.pow(closeness, 1.5);
+    const err =
+      Math.abs(target.rotateX - rotateX) + Math.abs(target.rotateY - rotateY);
 
-    const dirX = distFromCenter < 1 ? 0 : dx / distFromCenter;
-    const dirY = distFromCenter < 1 ? -1 : dy / distFromCenter;
+    setTilt({ rotateX, rotateY });
 
-    const maxTilt = 85;
-    tiltTargetRef.current = {
-      rotateY: dirX * maxTilt * strength,
-      rotateX: -dirY * maxTilt * strength,
-    };
+    if (err > 0.1 || Math.hypot(target.rotateX, target.rotateY) > 0.025) {
+      requestAnimationFrame(runTiltFrame);
+    } else {
+      tiltRafPending.current = false;
+      if (err > 0.002) {
+        tiltAnimRef.current = {
+          rotateX: target.rotateX,
+          rotateY: target.rotateY,
+        };
+        setTilt({ rotateX: target.rotateX, rotateY: target.rotateY });
+      }
+    }
   }, []);
 
-  useEffect(() => {
-    const LERP = 0.12;
-    let raf: number;
+  const kickTiltAnimation = useCallback(() => {
+    if (tiltRafPending.current) return;
+    tiltRafPending.current = true;
+    requestAnimationFrame(runTiltFrame);
+  }, [runTiltFrame]);
 
-    const tick = () => {
-      setTilt((prev) => {
-        const target = tiltTargetRef.current;
-        const rotateX = prev.rotateX + (target.rotateX - prev.rotateX) * LERP;
-        const rotateY = prev.rotateY + (target.rotateY - prev.rotateY) * LERP;
-        return { rotateX, rotateY };
-      });
-      raf = requestAnimationFrame(tick);
-    };
+  const updateTiltFromPointer = useCallback(
+    (clientX: number, clientY: number) => {
+      const el = diskRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const radius = Math.min(rect.width, rect.height) / 2;
 
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
+      const dx = clientX - centerX;
+      const dy = clientY - centerY;
+      const distFromCenter = Math.sqrt(dx * dx + dy * dy);
+      const closeness = Math.max(0, 1 - distFromCenter / radius);
+      const strength = Math.pow(closeness, 1.5);
+
+      const dirX = distFromCenter < 1 ? 0 : dx / distFromCenter;
+      const dirY = distFromCenter < 1 ? -1 : dy / distFromCenter;
+
+      const maxTilt = 85;
+      tiltTargetRef.current = {
+        rotateY: dirX * maxTilt * strength,
+        rotateX: -dirY * maxTilt * strength,
+      };
+      kickTiltAnimation();
+    },
+    [kickTiltAnimation]
+  );
+
+  const flushPendingPointer = useCallback(() => {
+    pointerCoalesceRaf.current = null;
+    const p = pendingPointerRef.current;
+    if (p) {
+      updateTiltFromPointer(p.x, p.y);
+    }
+  }, [updateTiltFromPointer]);
+
+  const queuePointerMove = useCallback(
+    (clientX: number, clientY: number) => {
+      pendingPointerRef.current = { x: clientX, y: clientY };
+      if (pointerCoalesceRaf.current == null) {
+        pointerCoalesceRaf.current = requestAnimationFrame(flushPendingPointer);
+      }
+    },
+    [flushPendingPointer]
+  );
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      updateTiltFromPointer(e.clientX, e.clientY);
+      queuePointerMove(e.clientX, e.clientY);
     };
 
     const handleTouchMove = (e: TouchEvent) => {
       if (e.touches.length > 0) {
-        updateTiltFromPointer(e.touches[0].clientX, e.touches[0].clientY);
+        queuePointerMove(e.touches[0].clientX, e.touches[0].clientY);
       }
     };
 
     const resetTilt = () => {
       tiltTargetRef.current = { rotateX: 0, rotateY: 0 };
+      kickTiltAnimation();
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mousemove", handleMouseMove, { passive: true });
     window.addEventListener("touchmove", handleTouchMove, { passive: true });
     window.addEventListener("touchend", resetTilt);
     window.addEventListener("touchcancel", resetTilt);
@@ -141,8 +189,11 @@ function SpotifyPage({
       window.removeEventListener("touchend", resetTilt);
       window.removeEventListener("touchcancel", resetTilt);
       document.removeEventListener("mouseleave", resetTilt);
+      if (pointerCoalesceRaf.current != null) {
+        cancelAnimationFrame(pointerCoalesceRaf.current);
+      }
     };
-  }, [updateTiltFromPointer]);
+  }, [queuePointerMove, kickTiltAnimation]);
 
   useEffect(() => {
     if (!track) return;
@@ -333,10 +384,13 @@ function SpotifyPage({
     };
   }, [track?.albumArt, initialAlbumColors, initialTrack]);
 
-  const isInitialTrack =
-    initialTrack && displayTrack?.songUrl === initialTrack.songUrl;
-  const useInitialTheme =
-    initialTextTheme != null && (isInitialTrack || !albumColors);
+  /**
+   * Only use server text tokens while we have no extracted palette.
+   * If SSR had no colors, `initialTextTheme` is the light-on-dark fallback — once client
+   * extraction fills `albumColors`, we must derive contrast from real luminance or light
+   * covers stay unreadable on a light backdrop.
+   */
+  const useInitialTheme = initialTextTheme != null && albumColors === null;
   const isLightBg =
     albumColors !== null &&
     shouldUseDarkTextForBackdrop(
@@ -392,9 +446,17 @@ function SpotifyPage({
       ? "bg-black"
       : "bg-white";
 
-  const backdropSurface = albumColors
-    ? buildAlbumBackdropSurface(albumColors.strips, albumColors.avgLuminance)
-    : null;
+  const backdropSurface = useMemo(
+    () =>
+      albumColors
+        ? buildAlbumBackdropSurface(
+            albumColors.strips,
+            albumColors.avgLuminance,
+            albumColors.palette ?? []
+          )
+        : null,
+    [albumColors]
+  );
 
   return (
     <div className="w-full max-w-sm overflow-hidden">
@@ -409,6 +471,8 @@ function SpotifyPage({
         <AlbumBackdrop
           baseColor={backdropSurface.baseColor}
           layers={backdropSurface.layers}
+          gradientOpacity={backdropSurface.gradientOpacity}
+          paletteWash={backdropSurface.paletteWash}
           strips={albumColors.strips}
           cycleKey={displayTrack?.songUrl ?? initialTrack?.songUrl ?? ""}
         />

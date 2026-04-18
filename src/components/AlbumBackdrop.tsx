@@ -19,9 +19,14 @@ function usePrefersReducedMotion() {
 export function AlbumBackdrop({
   baseColor,
   layers,
+  gradientOpacity,
+  paletteWash,
   strips,
   cycleKey,
-}: Pick<AlbumBackdropSurface, "baseColor" | "layers"> & {
+}: Pick<
+  AlbumBackdropSurface,
+  "baseColor" | "layers" | "gradientOpacity" | "paletteWash"
+> & {
   strips: readonly string[];
   cycleKey: string;
 }) {
@@ -31,13 +36,25 @@ export function AlbumBackdrop({
   return (
     <div
       className="album-backdrop-drift pointer-events-none fixed inset-0 -z-10 overflow-hidden"
-      style={{ backgroundColor: baseColor }}
+      style={{ backgroundColor: baseColor, contain: "strict" }}
       aria-hidden
     >
+      {paletteWash && (
+        <div
+          className="album-palette-wash absolute inset-0"
+          style={{
+            backgroundImage: paletteWash.backgroundImage,
+            opacity: paletteWash.opacity,
+          }}
+        />
+      )}
       {layers.length > 0 && (
         <div
-          className="absolute inset-0 opacity-[0.42]"
-          style={{ backgroundImage: layers.join(", ") }}
+          className="absolute inset-0"
+          style={{
+            backgroundImage: layers.join(", "),
+            opacity: gradientOpacity,
+          }}
         />
       )}
       <OrganicFloatingBlobs

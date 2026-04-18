@@ -74,3 +74,33 @@ body {
     will-change: auto;
   }
 }
+
+/* Distinct-palette wash: slow drift of background-position (see `buildPaletteWash`). */
+@keyframes album-palette-wash {
+  0% {
+    background-position: 8% 42%;
+  }
+  50% {
+    background-position: 92% 58%;
+  }
+  100% {
+    background-position: 22% 48%;
+  }
+}
+
+.album-palette-wash {
+  background-size: 320% 320%;
+  background-repeat: no-repeat;
+  /* Two stacked gradients blend for a richer mesh (top layer over bottom). */
+  background-blend-mode: soft-light, normal;
+  animation: album-palette-wash 56s ease-in-out infinite;
+  will-change: background-position;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .album-palette-wash {
+    animation: none;
+    background-position: 45% 50%;
+    will-change: auto;
+  }
+}
