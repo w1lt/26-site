@@ -1,4 +1,4 @@
-import { getLuminance, rgbToHex } from "./extractColors";
+import { getLuminance, isGrayscaleArtwork, rgbToHex } from "./extractColors";
 
 function stripAt(strips: readonly string[], t: number): string {
   if (strips.length === 0) return "#4a4658";
@@ -40,6 +40,13 @@ export function gradientLayerOpacity(avgLum: number): number {
 }
 
 /**
+ * Scalar applied to grayscale covers only. Synthetic accents are still present
+ * (so the page doesn't read as dead gray) but significantly less saturated than
+ * on colorful art — closer to a tinted dark base than a color wash.
+ */
+const GRAYSCALE_COLOR_DAMP = 0.45;
+
+/**
  * Base fill is now **always dark** — a narrow range from near-black to deep ink.
  * Previously this lifted toward light gray for bright covers, which made the
  * `screen`-blended blobs on top ceiling out at white (= washout). Keeping the
@@ -60,34 +67,22 @@ export function backdropBaseColor(avgLuminance: number): string {
  */
 function tintedBackdropBase(
   avgLum: number,
-  strips: readonly string[]
+  strips: readonly string[],
+  grayscale: boolean
 ): string {
   const base = backdropBaseColor(avgLum);
   if (strips.length === 0) return base;
   const accent = stripAt(strips, 0.5);
-  return `color-mix(in oklab, ${base} 88%, ${accent} 12%)`;
+  // Grayscale: pull almost all the way toward the neutral base so the
+  // synthetic accent doesn't visibly tint the floor of the backdrop.
+  const accentPct = grayscale ? 5 : 12;
+  const basePct = 100 - accentPct;
+  return `color-mix(in oklab, ${base} ${basePct}%, ${accent} ${accentPct}%)`;
 }
 
 function averageStripLuminance(strips: readonly string[]): number {
   if (strips.length === 0) return 0.18;
   return strips.reduce((s, h) => s + getLuminance(h), 0) / strips.length;
-}
-
-/** 0–1 "saturation" of a hex — max-min of channels. Used to detect grayscale covers. */
-function rgbChroma(hex: string): number {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  if (!m) return 0;
-  const r = parseInt(m[1], 16);
-  const g = parseInt(m[2], 16);
-  const b = parseInt(m[3], 16);
-  const max = Math.max(r, g, b);
-  if (max === 0) return 0;
-  return (max - Math.min(r, g, b)) / max;
-}
-
-function paletteMaxChroma(colors: readonly string[]): number {
-  if (!colors.length) return 0;
-  return colors.reduce((m, c) => Math.max(m, rgbChroma(c)), 0);
 }
 
 /** FNV-1a hash of a string, used as a PRNG seed so same album → same layout. */
@@ -188,10 +183,13 @@ function generateBlobSpecs(
  * This mirrors iOS Now Playing behavior on black-and-white artwork.
  */
 function grayscaleAccentPalette(avgLum: number): string[] {
+  // Low-chroma variants: hint of hue rather than a distinct blue/amber wash.
   if (avgLum < 0.42) {
-    return ["#4a5a7c", "#3a3a54", "#5a6a8c", "#2e3a54", "#483e5e"];
+    // Cool steel — closer to neutral slate than saturated blue.
+    return ["#3e4656", "#353a48", "#464f60", "#2d3340", "#3a3648"];
   }
-  return ["#a89080", "#947862", "#b09a86", "#8c7260", "#6a5240"];
+  // Warm taupe — closer to mushroom/neutral than amber.
+  return ["#706560", "#5f554f", "#7a6e66", "#5a4f48", "#524743"];
 }
 
 /**
@@ -224,10 +222,11 @@ export type AlbumBackdropSurface = {
 /** Two crossed linear gradients (spatial palette order + split hues) for richer, less “muddy” wash. */
 export function buildPaletteWash(
   palette: readonly string[],
-  avgLum: number
+  avgLum: number,
+  colorDamp: number = 1
 ): { backgroundImage: string; opacity: number } | null {
   if (palette.length < 3) return null;
-  const mixPct = Math.round(58 + avgLum * 36);
+  const mixPct = Math.round((58 + avgLum * 36) * colorDamp);
   const mkLoop = (hexes: readonly string[]) => {
     const loop = [...hexes];
     if (loop[0] !== loop[loop.length - 1]) loop.push(loop[0]);
@@ -256,7 +255,7 @@ export function buildPaletteWash(
   const g1 = `linear-gradient(in oklab, 132deg, ${mkLoop(a).join(", ")})`;
   const g2 = `linear-gradient(in oklab, 48deg, ${mkLoop(bStops).join(", ")})`;
   const backgroundImage = `${g1}, ${g2}`;
-  const opacity = Math.min(0.48, 0.2 + avgLum * 0.3);
+  const opacity = Math.min(0.48, (0.2 + avgLum * 0.3) * colorDamp);
   return { backgroundImage, opacity };
 }
 
@@ -276,11 +275,8 @@ export function buildAlbumBackdropSurface(
       ? Math.max(0, Math.min(1, avgLuminance))
       : averageStripLuminance(strips);
 
-  // Low chroma → monochrome cover. Check palette first (more distinct hues), then strips.
-  const chromaFromPalette = palette ? paletteMaxChroma(palette) : 0;
-  const chromaFromStrips = paletteMaxChroma(strips);
-  const maxChroma = Math.max(chromaFromPalette, chromaFromStrips);
-  const isGrayscale = maxChroma < 0.14;
+  const isGrayscale = isGrayscaleArtwork(strips, palette);
+  const colorDamp = isGrayscale ? GRAYSCALE_COLOR_DAMP : 1;
 
   // Blob palette: real palette on colorful covers, synthetic cinematic accents on
   // grayscale covers so they don't read as flat gray.
@@ -290,10 +286,16 @@ export function buildAlbumBackdropSurface(
       ? palette
       : strips;
 
-  const baseColor = tintedBackdropBase(lum, isGrayscale ? blobPalette : strips);
-  const gradientOpacity = gradientLayerOpacity(lum);
+  const baseColor = tintedBackdropBase(
+    lum,
+    isGrayscale ? blobPalette : strips,
+    isGrayscale
+  );
+  const gradientOpacity = gradientLayerOpacity(lum) * colorDamp;
   const paletteWash =
-    blobPalette.length >= 3 ? buildPaletteWash(blobPalette, lum) : null;
+    blobPalette.length >= 3
+      ? buildPaletteWash(blobPalette, lum, colorDamp)
+      : null;
 
   // Seeded PRNG so each album gets a unique but stable blob arrangement.
   const seedNum =
@@ -317,7 +319,7 @@ export function buildAlbumBackdropSurface(
     const falloff = Math.round(s.falloff);
     return `radial-gradient(ellipse ${w}% ${h}% at ${x}% ${y}%, ${mixBloom(
       blobAt(s.paletteIndex),
-      s.alpha,
+      s.alpha * colorDamp,
       lum
     )} 0%, transparent ${falloff}%)`;
   });
@@ -328,7 +330,11 @@ export function buildAlbumBackdropSurface(
     1 - Math.pow(Math.max(0, Math.min(1, (lum - 0.04) / 0.66)), 0.84);
   const edgeStrength = Math.round(20 + vignetteMix * 48);
   const chromEdge = vignetteEdgeColor(isGrayscale ? blobPalette : strips);
-  const edgeTint = `color-mix(in oklab, ${chromEdge} 36%, rgb(10 8 18) 64%)`;
+  // Grayscale: pull the vignette tint almost all the way to neutral ink so edges
+  // don't add an unwanted cool/warm cast.
+  const chromPct = isGrayscale ? 14 : 36;
+  const inkPct = 100 - chromPct;
+  const edgeTint = `color-mix(in oklab, ${chromEdge} ${chromPct}%, rgb(10 8 18) ${inkPct}%)`;
   const vignette = `radial-gradient(ellipse 108% 102% at 50% 50%, transparent 44%, color-mix(in oklab, ${edgeTint} ${edgeStrength}%, transparent) 100%)`;
 
   return {

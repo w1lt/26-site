@@ -56,6 +56,49 @@ export type AlbumColorResult = {
   palette: string[];
 };
 
+/** Must match `albumGradient` — low chroma ⇒ B&W-style cover with synthetic accent UI. */
+export const GRAYSCALE_CHROMA_THRESHOLD = 0.14;
+
+/** 0–1 channel spread (max−min)/max — same notion as `albumGradient` grayscale detection. */
+export function rgbChromaFromHex(hex: string): number {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return 0;
+  const r = parseInt(m[1], 16);
+  const g = parseInt(m[2], 16);
+  const b = parseInt(m[3], 16);
+  const max = Math.max(r, g, b);
+  if (max === 0) return 0;
+  return (max - Math.min(r, g, b)) / max;
+}
+
+export function maxChromaAcrossSwatches(colors: readonly string[]): number {
+  if (!colors.length) return 0;
+  let max = 0;
+  for (const c of colors) max = Math.max(max, rgbChromaFromHex(c));
+  return max;
+}
+
+/**
+ * Monochrome / near-monochrome artwork: the backdrop still uses a **dark** base with
+ * screened blobs (often synthetic hues). Photo luminance must not imply a “light page”.
+ */
+export function isGrayscaleArtwork(
+  strips: readonly string[],
+  palette?: readonly string[] | null
+): boolean {
+  const chromaPalette = palette?.length
+    ? maxChromaAcrossSwatches(palette)
+    : 0;
+  const chromaStrips = strips.length ? maxChromaAcrossSwatches(strips) : 0;
+  return Math.max(chromaPalette, chromaStrips) < GRAYSCALE_CHROMA_THRESHOLD;
+}
+
+export function albumCoverIsGrayscaleLike(
+  colors: Pick<AlbumColorResult, "strips" | "palette">
+): boolean {
+  return isGrayscaleArtwork(colors.strips, colors.palette);
+}
+
 export type TextTheme = {
   textClass: string;
   /** Song title — slightly more opaque than body text */
@@ -70,12 +113,21 @@ export type TextTheme = {
 /**
  * Whether to use dark (black) text vs light text. Prefers **whole-cover** `avgLuminance`
  * because theme swatches are chroma-boosted and can read "light" on very dark art.
+ *
+ * Grayscale covers are a special case: strips/theme are boosted neutrals but the UI
+ * backdrop stays on a dark tinted base with screened accents (`albumGradient`). High
+ * photo luminance must not flip to dark text on that still-dark canvas.
  */
 export function shouldUseDarkTextForBackdrop(
   theme: GradientPalette | null,
-  avgLuminance?: number | null
+  avgLuminance?: number | null,
+  grayscaleCover?: boolean
 ): boolean {
   if (!theme) return false;
+
+  if (grayscaleCover) {
+    return false;
+  }
 
   const themeBlend =
     getLuminance(theme[0]) * 0.45 +
@@ -95,7 +147,8 @@ export function shouldUseDarkTextForBackdrop(
 
 export function getTextThemeFromColors(
   colors: GradientPalette | null,
-  avgLuminance?: number | null
+  avgLuminance?: number | null,
+  grayscaleCover?: boolean
 ): TextTheme {
   if (!colors) {
     return {
@@ -108,7 +161,11 @@ export function getTextThemeFromColors(
       skeletonClass: "bg-gray-700",
     };
   }
-  const isLightBg = shouldUseDarkTextForBackdrop(colors, avgLuminance);
+  const isLightBg = shouldUseDarkTextForBackdrop(
+    colors,
+    avgLuminance,
+    grayscaleCover
+  );
   return {
     textClass: isLightBg ? "text-black/90" : "text-white/90",
     titleTextClass: isLightBg ? "text-black/95" : "text-white/95",

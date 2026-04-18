@@ -1,5 +1,6 @@
 import SpotifyPage from "@/components/pages/SpotifyPage";
 import { getNowPlaying } from "@/app/actions/spotify";
+import { albumCoverIsGrayscaleLike } from "@/lib/extractColors";
 import {
   extractColorsFromImageUrlServer,
   getTextThemeFromColors,
@@ -13,7 +14,10 @@ export default async function Home() {
       : null;
   const initialTextTheme = getTextThemeFromColors(
     initialAlbumColors?.theme ?? null,
-    initialAlbumColors?.avgLuminance ?? null
+    initialAlbumColors?.avgLuminance ?? null,
+    initialAlbumColors != null
+      ? albumCoverIsGrayscaleLike(initialAlbumColors)
+      : undefined
   );
 
   return (
