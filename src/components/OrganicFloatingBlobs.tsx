@@ -16,11 +16,40 @@ function mulberry32(seed: number) {
   };
 }
 
+/** Irregular “blob” corners (8-value border-radius), not circles. */
+function organicBorderRadius(rand: () => number): string {
+  const v = () => 22 + rand() * 56;
+  return `${v()}% ${v()}% ${v()}% ${v()}% / ${v()}% ${v()}% ${v()}% ${v()}%`;
+}
+
+/** Several soft ellipses at different centers = no single circular hotspot. */
+function organicLayeredGradient(color: string, rand: () => number): string {
+  const a = (x: number) => `color-mix(in srgb, ${color} ${x}%, transparent)`;
+  const layers: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    const w = 38 + rand() * 48;
+    const h = 32 + rand() * 55;
+    const cx = 18 + rand() * 64;
+    const cy = 15 + rand() * 70;
+    const stop = 42 + rand() * 22;
+    const c = i === 1 ? a(32) : a(48 + rand() * 18);
+    layers.push(
+      `radial-gradient(ellipse ${w}% ${h}% at ${cx}% ${cy}%, ${c} 0%, transparent ${stop}%)`
+    );
+  }
+  return layers.join(", ");
+}
+
 type BlobSpawn = {
   id: number;
   x: number;
   y: number;
   size: number;
+  widthMul: number;
+  heightMul: number;
+  rotation: number;
+  borderRadius: string;
+  backgroundImage: string;
   color: string;
   blurPx: number;
   duration: number;
@@ -34,11 +63,16 @@ function nextSpawn(strips: readonly string[], seed: number): BlobSpawn {
       : "#6a6288";
   return {
     id: seed,
-    x: 10 + r() * 78,
-    y: 8 + r() * 82,
-    size: 32 + r() * 48,
+    x: 8 + r() * 84,
+    y: 6 + r() * 86,
+    size: 36 + r() * 52,
+    widthMul: 0.72 + r() * 0.56,
+    heightMul: 0.68 + r() * 0.62,
+    rotation: -38 + r() * 76,
+    borderRadius: organicBorderRadius(r),
+    backgroundImage: organicLayeredGradient(color, r),
     color,
-    blurPx: 36 + Math.floor(r() * 28),
+    blurPx: 42 + Math.floor(r() * 36),
     duration: 14 + r() * 10,
   };
 }
@@ -73,24 +107,25 @@ function FloatingBlob({
     );
   }, [strips]);
 
-  const gradient = useMemo(
+  const blobStyle = useMemo(
     () =>
-      `radial-gradient(circle at 50% 50%, color-mix(in srgb, ${spawn.color} 58%, transparent) 0%, color-mix(in srgb, ${spawn.color} 22%, transparent) 42%, transparent 72%)`,
-    [spawn.color]
+      ({
+        left: `${spawn.x}%`,
+        top: `${spawn.y}%`,
+        width: `${spawn.size * spawn.widthMul}vmin`,
+        height: `${spawn.size * spawn.heightMul}vmin`,
+        borderRadius: spawn.borderRadius,
+        backgroundImage: spawn.backgroundImage,
+        filter: `blur(${spawn.blurPx}px)`,
+      }) as const,
+    [spawn]
   );
 
   if (!animate) {
     return (
       <div
-        className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full opacity-35 mix-blend-screen"
-        style={{
-          left: `${spawn.x}%`,
-          top: `${spawn.y}%`,
-          width: `${spawn.size}vmin`,
-          height: `${spawn.size}vmin`,
-          backgroundImage: gradient,
-          filter: `blur(${spawn.blurPx}px)`,
-        }}
+        className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 opacity-[0.35] mix-blend-screen"
+        style={{ ...blobStyle, rotate: `${spawn.rotation}deg` }}
         aria-hidden
       />
     );
@@ -99,19 +134,18 @@ function FloatingBlob({
   return (
     <motion.div
       key={spawn.id}
-      className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full mix-blend-screen will-change-transform"
-      style={{
-        left: `${spawn.x}%`,
-        top: `${spawn.y}%`,
-        width: `${spawn.size}vmin`,
-        height: `${spawn.size}vmin`,
-        backgroundImage: gradient,
-        filter: `blur(${spawn.blurPx}px)`,
-      }}
-      initial={{ scale: 0, opacity: 0 }}
+      className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 mix-blend-screen will-change-transform"
+      style={blobStyle}
+      initial={{ scale: 0, opacity: 0, rotate: spawn.rotation }}
       animate={{
-        scale: [0, 1.14, 1.02, 0],
-        opacity: [0, 0.72, 0.48, 0],
+        scale: [0, 1.08, 0.98, 0],
+        opacity: [0, 0.68, 0.42, 0],
+        rotate: [
+          spawn.rotation,
+          spawn.rotation + 7 + blobSlot * 2,
+          spawn.rotation - 4,
+          spawn.rotation + 2,
+        ],
       }}
       transition={{
         delay: blobSlot * 0.35,

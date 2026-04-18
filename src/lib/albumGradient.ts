@@ -17,13 +17,15 @@ function mixTransparent(hex: string, colorPct: number): string {
 
 /**
  * Muted base fill: avoids near-pure black and near-pure white; slight purple-gray bias.
+ * Softer gamma so mid-luminance covers get a wider range of grays, not just dark vs light.
  */
 export function backdropBaseColor(avgLuminance: number): string {
   const lum = Math.max(0, Math.min(1, avgLuminance));
-  const t = Math.pow(Math.max(0, Math.min(1, (lum - 0.07) / 0.56)), 0.85);
-  const r = Math.round(36 + (206 - 36) * t);
-  const g = Math.round(34 + (208 - 34) * t);
-  const b = Math.round(48 + (214 - 48) * t);
+  const tLinear = (lum - 0.05) / 0.62;
+  const t = Math.pow(Math.max(0, Math.min(1, tLinear)), 0.72);
+  const r = Math.round(32 + (212 - 32) * t);
+  const g = Math.round(30 + (214 - 30) * t);
+  const b = Math.round(44 + (218 - 44) * t);
   return rgbToHex(r, g, b);
 }
 
@@ -66,8 +68,8 @@ export function buildAlbumBackdropSurface(
   }
 
   const vignetteMix =
-    1 - Math.pow(Math.max(0, Math.min(1, (lum - 0.05) / 0.62)), 0.92);
-  const edgeStrength = Math.round(14 + vignetteMix * 34);
+    1 - Math.pow(Math.max(0, Math.min(1, (lum - 0.04) / 0.66)), 0.84);
+  const edgeStrength = Math.round(12 + vignetteMix * 38);
   const chromEdge = vignetteEdgeColor(strips);
   const edgeTint = `color-mix(in srgb, ${chromEdge} 40%, rgb(52 50 64) 60%)`;
 

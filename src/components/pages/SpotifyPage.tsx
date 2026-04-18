@@ -310,6 +310,14 @@ function SpotifyPage({
       setAlbumColors(null);
       return;
     }
+    /** Server already extracted for this cover — skip client (canvas) pass to avoid a color flash vs Sharp SSR. */
+    const sameCoverAsSsr =
+      initialAlbumColors != null &&
+      initialTrack != null &&
+      track.albumArt === initialTrack.albumArt;
+    if (sameCoverAsSsr) {
+      return;
+    }
     let cancelled = false;
     const albumArt = track.albumArt;
     extractColorsFromImageUrl(albumArt).then((result) => {
@@ -323,7 +331,7 @@ function SpotifyPage({
     return () => {
       cancelled = true;
     };
-  }, [track?.albumArt]);
+  }, [track?.albumArt, initialAlbumColors, initialTrack]);
 
   const isInitialTrack =
     initialTrack && displayTrack?.songUrl === initialTrack.songUrl;
@@ -335,16 +343,21 @@ function SpotifyPage({
       albumColors.theme,
       albumColors.avgLuminance
     );
+  const titleTextClass = useInitialTheme
+    ? (initialTextTheme.titleTextClass ?? initialTextTheme.textClass)
+    : isLightBg
+      ? "text-black/95"
+      : "text-white/95";
   const textClass = useInitialTheme
     ? initialTextTheme.textClass
     : isLightBg
-      ? "text-black"
-      : "text-white";
+      ? "text-black/90"
+      : "text-white/90";
   const artistTextClass = useInitialTheme
     ? initialTextTheme.artistTextClass
     : isLightBg
-      ? "text-black/80"
-      : "text-white/80";
+      ? "text-black/90"
+      : "text-white/90";
   const artistOnLightBackground =
     useInitialTheme && initialTextTheme
       ? initialTextTheme.artistTextClass.includes("text-black")
@@ -352,16 +365,16 @@ function SpotifyPage({
   const textMutedClass = useInitialTheme
     ? initialTextTheme.textMutedClass
     : isLightBg
-      ? "text-gray-700"
-      : "text-white/70";
-  /** Timestamps: same hue as muted but more opaque */
+      ? "text-gray-700/90"
+      : "text-white/90";
+  /** Timestamps: same hue as body text */
   const timeTextClass = useInitialTheme
     ? initialTextTheme.textMutedClass.includes("text-gray")
-      ? "text-gray-800"
-      : "text-white/88"
+      ? "text-gray-800/90"
+      : "text-white/90"
     : isLightBg
-      ? "text-gray-800"
-      : "text-white/88";
+      ? "text-gray-800/90"
+      : "text-white/90";
   const cardClass = "";
   const skeletonClass = useInitialTheme
     ? initialTextTheme.skeletonClass
@@ -372,11 +385,11 @@ function SpotifyPage({
     ? initialTextTheme.progressTrackStyle
     : isLightBg
       ? { backgroundColor: "rgba(127, 131, 136, 0.3)" }
-      : { backgroundColor: "rgba(55, 65, 81, 0.25)" };
+      : { backgroundColor: "rgba(255, 255, 255, 0.2)" };
   const progressFillClass = useInitialTheme
     ? initialTextTheme.progressFillClass
     : isLightBg
-      ? "bg-black/80"
+      ? "bg-black"
       : "bg-white";
 
   const backdropSurface = albumColors
@@ -425,7 +438,7 @@ function SpotifyPage({
               transition={{
                 opacity: { duration: initialTrack != null ? 0 : 0.4, delay: initialTrack != null ? 0 : 0.1 },
               }}
-              className="flex flex-col items-center max-w-sm"
+              className="flex flex-col items-center max-w-sm pt-4"
             >
               <div
                 className="w-full overflow-hidden pb-2 md:p-4 flex justify-center mb-6"
@@ -519,7 +532,8 @@ function SpotifyPage({
                   >
                     <div className="flex flex-col items-start w-full gap-0">
                       <h2
-                        className={`text-lg md:text-2xl font-normal inline-block max-w-full truncate cursor-pointer hover:underline leading-tight ${textClass}`}
+                        className={`text-xl md:text-3xl inline-block max-w-full truncate cursor-pointer hover:underline leading-tight ${titleTextClass}`}
+                        style={{ fontWeight: 700 }}
                         onClick={() => window.open(displayTrack.songUrl, "_blank")}
                       >
                         {displayTrack.name}
@@ -558,13 +572,14 @@ function SpotifyPage({
                                 ? "#000000"
                                 : "#ffffff",
                               color: artistOnLightBackground ? "#ffffff" : "#000000",
+                              opacity: 0.9,
                             }}
                           >
                             E
                           </span>
                         ) : null}
                         <p
-                          className={`text-xs md:text-sm inline-block min-w-0 flex-1 truncate cursor-pointer hover:underline leading-tight ${artistTextClass}`}
+                          className={`text-base md:text-lg inline-block min-w-0 flex-1 truncate cursor-pointer hover:underline leading-tight ${artistTextClass}`}
                           onClick={() => window.open(displayTrack.artistUrl, "_blank")}
                         >
                           {displayTrack.artist}
@@ -574,34 +589,37 @@ function SpotifyPage({
 
                     {displayTrack.durationMs && (
                       <div className="w-full max-w-sm mx-auto mt-4">
-                        <div
-                          className="w-full rounded-full h-1"
-                          style={{
-                            ...progressTrackStyle,
-                            marginBottom: "6px",
-                          }}
-                        >
+                        <div className="opacity-80">
                           <div
-                            className={`h-1 rounded-full transition-all duration-1000 ${progressFillClass}`}
+                            className="w-full rounded-full h-1"
                             style={{
-                              width: `${
-                                (displayProgress / displayTrack.durationMs) * 100
-                              }%`,
+                              ...progressTrackStyle,
+                              marginBottom: "6px",
                             }}
-                          />
+                          >
+                            <div
+                              className={`h-1 rounded-full transition-all duration-1000 ${progressFillClass}`}
+                              style={{
+                                width: `${
+                                  (displayProgress / displayTrack.durationMs) *
+                                  100
+                                }%`,
+                              }}
+                            />
+                          </div>
                         </div>
                         <div
                           className={`flex justify-between ${timeTextClass}`}
                           style={{
-                            fontSize: "10px",
+                            fontSize: "11px",
                             lineHeight: 1,
                             fontVariantNumeric: "tabular-nums",
                           }}
                         >
-                          <span style={{ fontSize: "10px", lineHeight: 1 }}>
+                          <span style={{ fontSize: "11px", lineHeight: 1 }}>
                             {formatTime(displayProgress)}
                           </span>
-                          <span style={{ fontSize: "10px", lineHeight: 1 }}>
+                          <span style={{ fontSize: "11px", lineHeight: 1 }}>
                             {formatTime(displayTrack.durationMs)}
                           </span>
                         </div>

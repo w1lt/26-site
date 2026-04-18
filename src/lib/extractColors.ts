@@ -56,6 +56,8 @@ export type AlbumColorResult = {
 
 export type TextTheme = {
   textClass: string;
+  /** Song title — slightly more opaque than body text */
+  titleTextClass: string;
   artistTextClass: string;
   textMutedClass: string;
   progressTrackStyle: { backgroundColor: string };
@@ -95,23 +97,25 @@ export function getTextThemeFromColors(
 ): TextTheme {
   if (!colors) {
     return {
-      textClass: "text-white",
-      artistTextClass: "text-white/80",
-      textMutedClass: "text-white/70",
-      progressTrackStyle: { backgroundColor: "rgba(55, 65, 81, 0.25)" },
+      textClass: "text-white/90",
+      titleTextClass: "text-white/95",
+      artistTextClass: "text-white/90",
+      textMutedClass: "text-white/90",
+      progressTrackStyle: { backgroundColor: "rgba(255, 255, 255, 0.2)" },
       progressFillClass: "bg-white",
       skeletonClass: "bg-gray-700",
     };
   }
   const isLightBg = shouldUseDarkTextForBackdrop(colors, avgLuminance);
   return {
-    textClass: isLightBg ? "text-black" : "text-white",
-    artistTextClass: isLightBg ? "text-black/80" : "text-white/80",
-    textMutedClass: isLightBg ? "text-gray-700" : "text-white/70",
+    textClass: isLightBg ? "text-black/90" : "text-white/90",
+    titleTextClass: isLightBg ? "text-black/95" : "text-white/95",
+    artistTextClass: isLightBg ? "text-black/90" : "text-white/90",
+    textMutedClass: isLightBg ? "text-gray-700/90" : "text-white/90",
     progressTrackStyle: isLightBg
       ? { backgroundColor: "rgba(127, 131, 136, 0.3)" }
-      : { backgroundColor: "rgba(55, 65, 81, 0.25)" },
-    progressFillClass: isLightBg ? "bg-black/80" : "bg-white",
+      : { backgroundColor: "rgba(255, 255, 255, 0.2)" },
+    progressFillClass: isLightBg ? "bg-black" : "bg-white",
     skeletonClass: isLightBg ? "bg-gray-400" : "bg-gray-700",
   };
 }
@@ -149,10 +153,10 @@ function isAcceptableFallbackPixel(r: number, g: number, b: number): boolean {
   return true;
 }
 
-/** Keep strip colors out of pure/near black and white so backdrops stay chromatic. */
+/** Keep strip colors out of pure black/white but allow a wider luminance range than before. */
 function clampChromaticRgb(r: number, g: number, b: number): [number, number, number] {
-  const lo = 34;
-  const hi = 236;
+  const lo = 16;
+  const hi = 248;
   const clamp = (c: number) => Math.min(hi, Math.max(lo, c));
   return [clamp(r), clamp(g), clamp(b)];
 }
@@ -204,7 +208,15 @@ function globalBrightnessBoost(
     }
   }
   const avg = count > 0 ? total / count : 0.5;
-  return Math.max(0.75, 0.75 + avg * 3.0);
+  // Wide range: dark covers stay darker, bright covers lift more (old curve floored ~0.75 for all).
+  const raw = 0.36 + avg * 1.86;
+  return Math.max(0.34, Math.min(1.44, raw));
+}
+
+/** Per-band spread so strips aren’t all pulled to the same mid luminance. */
+function stripBrightnessSpread(r: number, g: number, b: number): number {
+  const bright = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
+  return Math.max(0.64, Math.min(1.46, 1 + 0.92 * (bright - 0.46)));
 }
 
 /**
@@ -271,12 +283,13 @@ export function extractVerticalStripColors(
       continue;
     }
 
-    const [sr, sg, sb] = saturateRgb(r, g, b, 1.28);
-    const boostCapped = Math.min(boost, 1.22);
+    const [sr, sg, sb] = saturateRgb(r, g, b, 1.2);
+    const stripSpread = stripBrightnessSpread(r, g, b);
+    const combined = Math.min(1.48, boost * stripSpread) * 1.06;
     const [cr, cg, cb] = clampChromaticRgb(
-      sr * 1.08 * boostCapped,
-      sg * 1.08 * boostCapped,
-      sb * 1.08 * boostCapped
+      sr * combined,
+      sg * combined,
+      sb * combined
     );
     strips.push(rgbToHex(cr, cg, cb));
   }
